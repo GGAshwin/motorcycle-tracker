@@ -1,6 +1,7 @@
 import { useCallback, useState } from 'react';
 import {
   FlatList,
+  Modal,
   Pressable,
   StyleSheet,
   Text,
@@ -8,7 +9,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect, useRouter } from 'expo-router';
-import { desc } from 'drizzle-orm';
+import { desc, eq } from 'drizzle-orm';
 
 import { getDb } from '@/db/client';
 import { trips, type Trip } from '@/db/schema';
@@ -54,11 +55,12 @@ function formatDist(metres: number): string {
 
 // ── Trip row ──────────────────────────────────────────────────────────────────
 
-function TripRow({ trip, onPress }: { trip: Trip; onPress: () => void }) {
+function TripRow({ trip, onPress, onLongPress }: { trip: Trip; onPress: () => void; onLongPress: () => void }) {
   return (
     <Pressable
       style={({ pressed }) => [styles.row, pressed && { opacity: 0.7 }]}
       onPress={onPress}
+      onLongPress={onLongPress}
     >
       <View style={styles.rowLeft}>
         <Text style={styles.rowDate}>{formatDate(trip.date)}</Text>
@@ -79,6 +81,7 @@ export default function HistoryScreen() {
   const router = useRouter();
   const [rideHistory, setRideHistory] = useState<Trip[]>([]);
   const [seeding, setSeeding] = useState(false);
+  const [deleteTargetId, setDeleteTargetId] = useState<number | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -104,6 +107,13 @@ export default function HistoryScreen() {
       setSeeding(false);
     }
   }, [load]);
+
+  const confirmDelete = useCallback(async () => {
+    if (deleteTargetId === null) return;
+    await getDb().delete(trips).where(eq(trips.id, deleteTargetId));
+    setDeleteTargetId(null);
+    await load();
+  }, [deleteTargetId, load]);
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -136,12 +146,46 @@ export default function HistoryScreen() {
             <TripRow
               trip={item}
               onPress={() => router.push({ pathname: '/trip/[id]', params: { id: item.id } })}
+              onLongPress={() => setDeleteTargetId(item.id)}
             />
           )}
           contentContainerStyle={styles.list}
           ItemSeparatorComponent={() => <View style={styles.separator} />}
         />
       )}
+
+      {/* ── Delete confirmation modal ── */}
+      <Modal
+        visible={deleteTargetId !== null}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setDeleteTargetId(null)}
+      >
+        <Pressable style={styles.modalBackdrop} onPress={() => setDeleteTargetId(null)}>
+          <Pressable style={styles.modalCard} onPress={() => {}}>
+            <Text style={styles.modalTitle}>Delete ride?</Text>
+            <Text style={styles.modalBody}>
+              This will permanently remove the ride and all its GPS data.
+            </Text>
+            <View style={styles.modalDivider} />
+            <View style={styles.modalActions}>
+              <Pressable
+                style={({ pressed }) => [styles.modalBtn, pressed && { opacity: 0.6 }]}
+                onPress={() => setDeleteTargetId(null)}
+              >
+                <Text style={styles.modalBtnCancel}>Cancel</Text>
+              </Pressable>
+              <View style={styles.modalBtnDivider} />
+              <Pressable
+                style={({ pressed }) => [styles.modalBtn, pressed && { opacity: 0.6 }]}
+                onPress={confirmDelete}
+              >
+                <Text style={styles.modalBtnDelete}>Delete</Text>
+              </Pressable>
+            </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -235,5 +279,65 @@ const styles = StyleSheet.create({
   emptyText: {
     color: C.textSecondary,
     fontSize: 15,
+  },
+
+  // Delete modal
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 32,
+  },
+  modalCard: {
+    width: '100%',
+    backgroundColor: C.surface,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: C.border,
+    overflow: 'hidden',
+  },
+  modalTitle: {
+    color: C.textPrimary,
+    fontSize: 17,
+    fontWeight: '700',
+    textAlign: 'center',
+    paddingTop: 24,
+    paddingHorizontal: 24,
+    paddingBottom: 6,
+  },
+  modalBody: {
+    color: C.textSecondary,
+    fontSize: 14,
+    textAlign: 'center',
+    paddingHorizontal: 24,
+    paddingBottom: 24,
+    lineHeight: 20,
+  },
+  modalDivider: {
+    height: 1,
+    backgroundColor: C.border,
+  },
+  modalActions: {
+    flexDirection: 'row',
+  },
+  modalBtn: {
+    flex: 1,
+    paddingVertical: 16,
+    alignItems: 'center',
+  },
+  modalBtnDivider: {
+    width: 1,
+    backgroundColor: C.border,
+  },
+  modalBtnCancel: {
+    color: C.textSecondary,
+    fontSize: 16,
+    fontWeight: '500',
+  },
+  modalBtnDelete: {
+    color: '#FF3B30',
+    fontSize: 16,
+    fontWeight: '600',
   },
 });
