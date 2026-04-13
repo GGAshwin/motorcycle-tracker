@@ -3,6 +3,7 @@ import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect, useState } from 'react';
 import { Text, View } from 'react-native';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import 'react-native-reanimated';
 
 // Side-effect import: registers REGISTERED_TRACKING_TASK with TaskManager.
@@ -53,23 +54,25 @@ export default function RootLayout() {
   if (!dbReady) return null;
 
   return (
-    <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
-      <Stack>
-        <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-        <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
-        <Stack.Screen
-          name="trip/[id]"
-          options={{
-            headerShown: true,
-            title: 'Trip Map',
-            headerStyle: { backgroundColor: '#0D0D0F' },
-            headerTintColor: '#FFFFFF',
-            headerTitleStyle: { fontWeight: '600' },
-            headerBackTitle: 'History',
-          }}
-        />
-      </Stack>
-      <StatusBar style="auto" />
-    </ThemeProvider>
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
+        <Stack>
+          <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+          <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
+          <Stack.Screen
+            name="trip/[id]"
+            options={{
+              headerShown: true,
+              title: 'Trip Map',
+              headerStyle: { backgroundColor: '#0D0D0F' },
+              headerTintColor: '#FFFFFF',
+              headerTitleStyle: { fontWeight: '600' },
+              headerBackTitle: 'History',
+            }}
+          />
+        </Stack>
+        <StatusBar style="auto" />
+      </ThemeProvider>
+    </GestureHandlerRootView>
   );
 }

@@ -9,7 +9,11 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
+import { useFocusEffect } from 'expo-router';
+import { sql } from 'drizzle-orm';
 
+import { getDb } from '@/db/client';
+import { trips } from '@/db/schema';
 import { useCurrentRide } from '@/hooks/useCurrentRide';
 
 const C = {
@@ -35,6 +39,33 @@ export default function RideScreen() {
 
   const [loading, setLoading]     = useState(false);
   const [rideError, setRideError] = useState<string | null>(null);
+  
+  const [odometer, setOdometer] = useState({ count: 0, totalDist: 0 });
+
+  useFocusEffect(
+    useCallback(() => {
+      let active = true;
+      (async () => {
+        try {
+          const result = await getDb()
+            .select({
+              count: sql<number>`count(*)`,
+              totalDist: sql<number>`sum(${trips.totalDist})`
+            })
+            .from(trips);
+          if (active && result[0]) {
+            setOdometer({
+              count: result[0].count || 0,
+              totalDist: result[0].totalDist || 0,
+            });
+          }
+        } catch (err) {
+          console.error('Failed to fetch odometer data:', err);
+        }
+      })();
+      return () => { active = false; };
+    }, [])
+  );
 
   // Keep the screen on while recording; release when done.
   useEffect(() => {
@@ -65,6 +96,20 @@ export default function RideScreen() {
         pulse.stopAnimation();
         pulse.setValue(1);
         await stopRide();
+        // optionally reload odometer stats here right after stopping, 
+        // though useFocusEffect might cover most cases.
+        const result = await getDb()
+            .select({
+              count: sql<number>`count(*)`,
+              totalDist: sql<number>`sum(${trips.totalDist})`
+            })
+            .from(trips);
+        if (result[0]) {
+          setOdometer({
+            count: result[0].count || 0,
+            totalDist: result[0].totalDist || 0,
+          });
+        }
       } else {
         await startRide();
         startPulse();
@@ -77,6 +122,8 @@ export default function RideScreen() {
       setLoading(false);
     }
   }, [isRecording, startRide, stopRide, pulse, startPulse]);
+
+  const displayDist = odometer.totalDist + (isRecording ? distance : 0);
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -99,10 +146,27 @@ export default function RideScreen() {
         <Text style={styles.speedUnit}>km/h</Text>
       </View>
 
+      {/* ── Odometer UI ── */}
+      <View style={styles.odometerContainer}>
+        <View style={styles.odometerBox}>
+          <Text style={styles.odometerLabel}>TRIPS</Text>
+          <Text style={styles.odometerValue}>{odometer.count}</Text>
+        </View>
+        <View style={styles.odometerDivider} />
+        <View style={styles.odometerBox}>
+          <Text style={styles.odometerLabel}>TOTAL DIST</Text>
+          <Text style={styles.odometerValue}>
+            {displayDist < 1000
+              ? `${Math.round(displayDist)} m`
+              : `${(displayDist / 1000).toFixed(1)} km`}
+          </Text>
+        </View>
+      </View>
+
       {/* ── Distance (only visible while recording) ── */}
       {isRecording && (
         <View style={styles.distanceRow}>
-          <Text style={styles.distanceLabel}>DISTANCE</Text>
+          <Text style={styles.distanceLabel}>THIS RIDE</Text>
           <Text style={styles.distanceValue}>
             {distance < 1000
               ? `${Math.round(distance)} m`
@@ -210,6 +274,42 @@ const styles = StyleSheet.create({
     marginTop: 8,
   },
 
+  // Odometer
+  odometerContainer: {
+    flexDirection: 'row',
+    marginHorizontal: 24,
+    marginTop: 16,
+    backgroundColor: '#161618',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: C.border,
+    paddingVertical: 16,
+    justifyContent: 'space-evenly',
+    alignItems: 'center',
+  },
+  odometerBox: {
+    alignItems: 'center',
+    flex: 1,
+  },
+  odometerLabel: {
+    color: C.textSecondary,
+    fontSize: 10,
+    fontWeight: '700',
+    letterSpacing: 1.2,
+    marginBottom: 4,
+  },
+  odometerValue: {
+    color: C.textPrimary,
+    fontSize: 20,
+    fontWeight: '300',
+    fontVariant: ['tabular-nums'],
+  },
+  odometerDivider: {
+    width: 1,
+    height: 24,
+    backgroundColor: C.border,
+  },
+
   // Actions
   actions: {
     marginHorizontal: 24,
@@ -257,9 +357,9 @@ const styles = StyleSheet.create({
     paddingVertical: 14,
   },
   distanceLabel: {
-    color: C.textSecondary,
+    color: C.orange,
     fontSize: 11,
-    fontWeight: '600',
+    fontWeight: '700',
     letterSpacing: 1.5,
   },
   distanceValue: {

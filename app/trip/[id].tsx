@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
 import MapView, { Marker, Polyline } from 'react-native-maps';
 import { eq, asc } from 'drizzle-orm';
+import BottomSheet, { BottomSheetScrollView, BottomSheetView } from '@gorhom/bottom-sheet';
 
 import { getDb } from '@/db/client';
 import { telemetryPoints, trips } from '@/db/schema';
@@ -64,13 +65,15 @@ function StatItem({
   label,
   value,
   highlight,
+  style
 }: {
   label: string;
   value: string;
   highlight?: boolean;
+  style?: object;
 }) {
   return (
-    <View style={styles.statItem}>
+    <View style={[styles.statItem, style]}>
       <Text style={styles.statLabel}>{label}</Text>
       <Text style={[styles.statValue, highlight && { color: C.orange }]}>
         {value}
@@ -86,6 +89,8 @@ export default function TripMapScreen() {
   const numericId = parseInt(id, 10);
   const navigation = useNavigation();
   const mapRef = useRef<MapView>(null);
+  const bottomSheetRef = useRef<BottomSheet>(null);
+  const snapPoints = useMemo(() => ['18%', '50%'], []);
 
   const [trip, setTrip]       = useState<Trip | null>(null);
   const [points, setPoints]   = useState<TelemetryPoint[]>([]);
@@ -218,28 +223,37 @@ export default function TripMapScreen() {
         />
       </MapView>
 
-      {/* ── Stats card ── */}
+      {/* ── Scrollable Bottom Sheet for Stats ── */}
       {trip && (
-        <View style={styles.statsCard}>
-          <View style={styles.statsRow}>
-            <StatItem label="DISTANCE" value={formatDist(trip.totalDist)} />
-            <View style={styles.statsDivider} />
-            <StatItem
-              label="DURATION"
-              value={formatDuration(trip.startTime, trip.endTime ?? null)}
-            />
-          </View>
-          <View style={styles.statsRowDivider} />
-          <View style={styles.statsRow}>
-            <StatItem label="AVG SPEED" value={formatSpeed(avgSpeed)} />
-            <View style={styles.statsDivider} />
-            <StatItem
-              label="MAX SPEED"
-              value={formatSpeed(maxSpeed)}
-              highlight={maxSpeed * 3.6 > 100}
-            />
-          </View>
-        </View>
+        <BottomSheet
+          ref={bottomSheetRef}
+          snapPoints={snapPoints}
+          backgroundStyle={styles.bottomSheetBackground}
+          handleIndicatorStyle={styles.handleIndicator}
+        >
+          <BottomSheetScrollView contentContainerStyle={styles.bottomSheetContent}>
+            <View style={styles.statsRow}>
+              <StatItem label="DISTANCE" value={formatDist(trip.totalDist)} />
+              <View style={styles.statsDivider} />
+              <StatItem
+                label="DURATION"
+                value={formatDuration(trip.startTime, trip.endTime ?? null)}
+              />
+            </View>
+            <View style={styles.statsRowDivider} />
+            <View style={styles.statsRow}>
+              <StatItem label="AVG SPEED" value={formatSpeed(avgSpeed)} />
+              <View style={styles.statsDivider} />
+              <StatItem
+                label="MAX SPEED"
+                value={formatSpeed(maxSpeed)}
+                highlight={maxSpeed * 3.6 > 100}
+              />
+            </View>
+            {/* Additional details could go here in this scrollable area */}
+            <View style={styles.extraSpacing} />
+          </BottomSheetScrollView>
+        </BottomSheet>
       )}
     </View>
   );
@@ -279,20 +293,22 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
 
-  // Stats card
-  statsCard: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
+  // Bottom Sheet 
+  bottomSheetBackground: {
     backgroundColor: C.surface,
-    borderTopWidth: 1,
-    borderTopColor: C.border,
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
-    paddingTop: 20,
-    paddingBottom: 36,
+    borderWidth: 1,
+    borderColor: C.border,
+  },
+  handleIndicator: {
+    backgroundColor: C.border,
+    width: 40,
+  },
+  bottomSheetContent: {
     paddingHorizontal: 16,
+    paddingTop: 8,
+    paddingBottom: 40,
   },
   statsRow: {
     flexDirection: 'row',
@@ -326,4 +342,7 @@ const styles = StyleSheet.create({
     fontWeight: '300',
     fontVariant: ['tabular-nums'],
   },
+  extraSpacing: {
+    height: 60,
+  }
 });
