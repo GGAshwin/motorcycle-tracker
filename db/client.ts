@@ -68,7 +68,6 @@ export function initDatabase(): void {
        lon         REAL    NOT NULL,
        alt         REAL,
        speed       REAL,
-       lean_angle  REAL,
        timestamp   INTEGER NOT NULL
      )`
   );

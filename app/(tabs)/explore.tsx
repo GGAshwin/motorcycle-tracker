@@ -118,15 +118,15 @@ export default function HistoryScreen() {
   return (
     <SafeAreaView style={styles.safe}>
       <View style={styles.header}>
-        <View style={styles.headerRow}>
+        <View style={styles.headerRow}> 
           <Text style={styles.title}>Ride History</Text>
-          <Pressable
+          {/* <Pressable
             style={({ pressed }) => [styles.seedBtn, pressed && { opacity: 0.6 }]}
             onPress={handleSeed}
             disabled={seeding}
           >
             <Text style={styles.seedBtnText}>{seeding ? '…' : '+ Test ride'}</Text>
-          </Pressable>
+          </Pressable> */}
         </View>
         <Text style={styles.subtitle}>
           {rideHistory.length === 0 ? 'No rides yet' : `${rideHistory.length} ride${rideHistory.length !== 1 ? 's' : ''}`}

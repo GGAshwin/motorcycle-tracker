@@ -3,19 +3,13 @@
  *
  * Architecture overview
  * ─────────────────────
- * Expo's background location task and DeviceMotion sensor both execute on the
- * same JS thread, so we can share plain module-level variables between them
- * without any IPC or shared memory primitives.
+ * Expo's background location task executes on the JS thread.
  *
  *  ┌─────────────────────────────────────────────────────────────┐
  *  │  JS Thread                                                  │
  *  │                                                             │
- *  │  DeviceMotion listener (50 Hz)                              │
- *  │    → pushes lean samples into leanAngleSamples[]            │
- *  │    → updates liveState for UI subscribers                   │
- *  │                                                             │
  *  │  REGISTERED_TRACKING_TASK (fired by OS on each GPS fix)     │
- *  │    → consumes + averages leanAngleSamples[] for the window  │
+ *  │    → accumulates distance (speed-gated Haversine)           │
  *  │    → pushes one PendingPoint into pendingPoints[]           │
  *  │    → updates liveState.speed for UI subscribers             │
  *  │                                                             │
@@ -31,35 +25,30 @@
 
 import * as TaskManager from 'expo-task-manager';
 import * as Location from 'expo-location';
-import { DeviceMotion } from 'expo-sensors';
 import { eq } from 'drizzle-orm';
 
 import { getDb, getRawDb, initDatabase } from '../db/client';
 import { trips, telemetryPoints } from '../db/schema';
-import { calculateLeanAngle } from './leanAngle';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 export const TRACKING_TASK_NAME = 'REGISTERED_TRACKING_TASK';
 
-/** DeviceMotion polling interval in milliseconds (20 ms = 50 Hz). */
-const MOTION_INTERVAL_MS = 20;
-
 /** How often the batch is flushed to SQLite (milliseconds). */
 const FLUSH_INTERVAL_MS = 10_000;
-
-/** Maximum lean-angle ring buffer size (50 Hz × 4 s safety margin). */
-const MAX_LEAN_SAMPLES = 200;
 
 /** Maximum pending points before an emergency flush is forced. */
 const EMERGENCY_FLUSH_THRESHOLD = 150;
 
-// ── Types ─────────────────────────────────────────────────────────────────────
+/**
+ * Minimum GPS speed (m/s) required before a fix contributes to total distance.
+ * GPS-reported speed is Doppler-based and accurate even when position is noisy.
+ * 0.5 m/s ≈ 1.8 km/h — filters out GPS drift while stationary or walking,
+ * while capturing all real riding including slow traffic.
+ */
+const MIN_MOVING_SPEED_MS = 0.5;
 
-interface LeanSample {
-  angle: number;  // degrees
-  ts: number;     // Date.now()
-}
+// ── Types ─────────────────────────────────────────────────────────────────────
 
 interface PendingPoint {
   tripId: number;
@@ -67,13 +56,10 @@ interface PendingPoint {
   lon: number;
   alt: number | null;
   speed: number | null;
-  leanAngle: number | null;
   timestamp: number; // Unix ms
 }
 
 export interface LiveRideState {
-  /** Current lean angle in degrees (EMA-smoothed for UI). */
-  leanAngle: number;
   /** Speed in m/s from GPS. */
   speed: number;
   /** Accumulated trip distance in metres. */
@@ -85,17 +71,14 @@ export interface LiveRideState {
 
 // ── Module-level shared state ─────────────────────────────────────────────────
 
-let leanAngleSamples: LeanSample[] = [];
 let pendingPoints: PendingPoint[] = [];
 let currentTripId: number | null = null;
 let tripDistMetres = 0;
 let lastCoord: { lat: number; lon: number } | null = null;
 
 let batchFlushTimer: ReturnType<typeof setInterval> | null = null;
-let motionSubscription: { remove: () => void } | null = null;
 
 let liveState: LiveRideState = {
-  leanAngle: 0,
   speed: 0,
   distance: 0,
   isRecording: false,
@@ -139,50 +122,6 @@ function haversineMetres(
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
-// ── DeviceMotion (50 Hz) ──────────────────────────────────────────────────────
-
-export function startMotionSampling(): void {
-  DeviceMotion.setUpdateInterval(MOTION_INTERVAL_MS);
-
-  motionSubscription = DeviceMotion.addListener(({ accelerationIncludingGravity }) => {
-    if (!accelerationIncludingGravity) return;
-
-    const angle = calculateLeanAngle(
-      accelerationIncludingGravity.x,
-      accelerationIncludingGravity.y,
-      accelerationIncludingGravity.z,
-    );
-
-    // Push into ring buffer, evict oldest if over cap.
-    leanAngleSamples.push({ angle, ts: Date.now() });
-    if (leanAngleSamples.length > MAX_LEAN_SAMPLES) {
-      leanAngleSamples.shift();
-    }
-
-    emit({ leanAngle: angle });
-  });
-}
-
-export function stopMotionSampling(): void {
-  motionSubscription?.remove();
-  motionSubscription = null;
-  leanAngleSamples = [];
-}
-
-// ── Lean angle window consumer ────────────────────────────────────────────────
-
-/**
- * Drains the sample buffer and returns the simple mean lean angle.
- * Returns null if no samples were collected (sensor unavailable).
- */
-function consumeLeanWindow(): number | null {
-  if (leanAngleSamples.length === 0) return null;
-  const sum = leanAngleSamples.reduce((acc, s) => acc + s.angle, 0);
-  const mean = sum / leanAngleSamples.length;
-  leanAngleSamples = [];
-  return mean;
-}
-
 // ── Batch flush ───────────────────────────────────────────────────────────────
 
 async function flushBatch(): Promise<void> {
@@ -196,9 +135,8 @@ async function flushBatch(): Promise<void> {
         tripId:    p.tripId,
         lat:       p.lat,
         lon:       p.lon,
-        alt:       p.alt    ?? undefined,
-        speed:     p.speed  ?? undefined,
-        leanAngle: p.leanAngle ?? undefined,
+        alt:       p.alt   ?? undefined,
+        speed:     p.speed ?? undefined,
         timestamp: p.timestamp,
       }))
     );
@@ -238,8 +176,10 @@ TaskManager.defineTask(
       const { latitude: lat, longitude: lon, altitude: alt, speed } =
         loc.coords;
 
-      // Accumulate trip distance using Haversine.
-      if (lastCoord) {
+      // Accumulate trip distance using Haversine, but only when the GPS
+      // reports actual movement. GPS position is noisy (~3-5 m per fix),
+      // so standing still or walking would otherwise inflate the total.
+      if (lastCoord && speed !== null && speed >= MIN_MOVING_SPEED_MS) {
         tripDistMetres += haversineMetres(
           lastCoord.lat, lastCoord.lon,
           lat, lon
@@ -247,23 +187,18 @@ TaskManager.defineTask(
       }
       lastCoord = { lat, lon };
 
-      // Average all 50-Hz lean samples collected since the last GPS fix.
-      const avgLean = consumeLeanWindow();
-
       pendingPoints.push({
         tripId:    currentTripId,
         lat,
         lon,
         alt:       alt   ?? null,
         speed:     speed ?? null,
-        leanAngle: avgLean,
         timestamp: loc.timestamp,
       });
 
       emit({ speed: speed ?? 0, distance: tripDistMetres });
 
-      // Safety valve: flush immediately if buffer grows unexpectedly large
-      // (e.g., the interval timer was delayed by OS throttling).
+      // Safety valve: flush immediately if buffer grows unexpectedly large.
       if (pendingPoints.length >= EMERGENCY_FLUSH_THRESHOLD) {
         await flushBatch();
       }
@@ -274,8 +209,8 @@ TaskManager.defineTask(
 // ── Trip lifecycle ────────────────────────────────────────────────────────────
 
 /**
- * Creates a new trip record, starts DeviceMotion sampling, starts the
- * periodic batch flush, and begins background location updates.
+ * Creates a new trip record, starts the periodic batch flush, and begins
+ * background location updates.
  *
  * @throws If foreground location permission is not granted.
  * @returns The new trip's database ID.
@@ -301,9 +236,6 @@ export async function startTrip(): Promise<number> {
 
   const now = Date.now();
 
-  // Use runSync so lastInsertRowId is available synchronously without needing
-  // a follow-up SELECT.  Avoids the async/sync ordering hazard of getFirstSync
-  // racing against an awaited drizzle insert.
   const result = getRawDb().runSync(
     'INSERT INTO trips (date, start_time, total_dist) VALUES (?, ?, 0)',
     [now, now]
@@ -317,8 +249,6 @@ export async function startTrip(): Promise<number> {
   lastCoord      = null;
   pendingPoints  = [];
 
-  startMotionSampling();
-
   batchFlushTimer = setInterval(flushBatch, FLUSH_INTERVAL_MS);
 
   await Location.startLocationUpdatesAsync(TRACKING_TASK_NAME, {
@@ -327,9 +257,6 @@ export async function startTrip(): Promise<number> {
     distanceInterval:  0,
     showsBackgroundLocationIndicator: backgroundGranted,
     foregroundService: {
-      // Foreground service keeps tracking alive when the screen dims.
-      // Works with foreground permission alone; background permission
-      // additionally tracks when the app is fully killed.
       notificationTitle: 'MotoTrack – Recording',
       notificationBody:  'Tap to return to the app.',
       notificationColor: '#FF6B00',
@@ -341,22 +268,18 @@ export async function startTrip(): Promise<number> {
 }
 
 /**
- * Stops GPS updates, stops motion sampling, performs a final flush, and
- * marks the trip as ended with its final distance.
+ * Stops GPS updates, performs a final flush, and marks the trip as ended.
  */
 export async function stopTrip(): Promise<void> {
   if (currentTripId === null) return;
 
   await Location.stopLocationUpdatesAsync(TRACKING_TASK_NAME);
 
-  stopMotionSampling();
-
   if (batchFlushTimer) {
     clearInterval(batchFlushTimer);
     batchFlushTimer = null;
   }
 
-  // Final flush of any buffered points.
   await flushBatch();
 
   await getDb()
@@ -368,5 +291,5 @@ export async function stopTrip(): Promise<void> {
   tripDistMetres = 0;
   lastCoord      = null;
 
-  emit({ isRecording: false, currentTripId: null, leanAngle: 0, speed: 0, distance: 0 });
+  emit({ isRecording: false, currentTripId: null, speed: 0, distance: 0 });
 }

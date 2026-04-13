@@ -32,49 +32,6 @@ const DARK_MAP_STYLE = [
   { featureType: 'transit', stylers: [{ visibility: 'off' }] },
 ];
 
-// ── Lean angle zone helpers ───────────────────────────────────────────────────
-
-function leanColor(angle: number | null | undefined): string {
-  const abs = Math.abs(angle ?? 0);
-  if (abs > 50) return '#FF6B00';   // orange
-  if (abs > 30) return '#FFD60A';   // yellow
-  return '#FFFFFF';                 // white
-}
-
-// Groups consecutive points that share the same lean color zone into a single
-// Polyline. Boundary points are shared between adjacent groups so there are no
-// visible gaps where the color changes.
-interface Segment {
-  key: string;
-  color: string;
-  coords: { latitude: number; longitude: number }[];
-}
-
-function buildSegments(pts: TelemetryPoint[]): Segment[] {
-  if (pts.length < 2) return [];
-
-  const groups: Segment[] = [];
-  let color = leanColor(pts[0].leanAngle);
-  let coords: { latitude: number; longitude: number }[] = [
-    { latitude: pts[0].lat, longitude: pts[0].lon },
-  ];
-
-  for (let i = 1; i < pts.length; i++) {
-    const pt = pts[i];
-    const c = leanColor(pt.leanAngle);
-    coords.push({ latitude: pt.lat, longitude: pt.lon });
-
-    if (c !== color || i === pts.length - 1) {
-      groups.push({ key: `seg-${groups.length}`, color, coords });
-      // Overlap by one point so adjacent segments connect seamlessly.
-      color  = c;
-      coords = [{ latitude: pt.lat, longitude: pt.lon }];
-    }
-  }
-
-  return groups;
-}
-
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function formatDate(ms: number): string {
@@ -95,6 +52,10 @@ function formatDuration(startMs: number, endMs: number | null): string {
 function formatDist(metres: number): string {
   if (metres < 1000) return `${Math.round(metres)} m`;
   return `${(metres / 1000).toFixed(1)} km`;
+}
+
+function formatSpeed(ms: number): string {
+  return `${(ms * 3.6).toFixed(0)} km/h`;
 }
 
 // ── Stat item ─────────────────────────────────────────────────────────────────
@@ -126,8 +87,8 @@ export default function TripMapScreen() {
   const navigation = useNavigation();
   const mapRef = useRef<MapView>(null);
 
-  const [trip, setTrip]     = useState<Trip | null>(null);
-  const [points, setPoints] = useState<TelemetryPoint[]>([]);
+  const [trip, setTrip]       = useState<Trip | null>(null);
+  const [points, setPoints]   = useState<TelemetryPoint[]>([]);
   const [loading, setLoading] = useState(true);
 
   // ── Data fetch ──────────────────────────────────────────────────────────────
@@ -175,12 +136,21 @@ export default function TripMapScreen() {
     );
   }, [points]);
 
-  const segments = useMemo(() => buildSegments(points), [points]);
-
-  const maxLean = useMemo(
-    () => points.reduce((max, p) => Math.max(max, Math.abs(p.leanAngle ?? 0)), 0),
+  const routeCoords = useMemo(
+    () => points.map(p => ({ latitude: p.lat, longitude: p.lon })),
     [points]
   );
+
+  const maxSpeed = useMemo(
+    () => points.reduce((max, p) => Math.max(max, p.speed ?? 0), 0),
+    [points]
+  );
+
+  const avgSpeed = useMemo(() => {
+    const moving = points.filter(p => (p.speed ?? 0) > 0.5);
+    if (moving.length === 0) return 0;
+    return moving.reduce((sum, p) => sum + (p.speed ?? 0), 0) / moving.length;
+  }, [points]);
 
   // ── Loading ─────────────────────────────────────────────────────────────────
 
@@ -230,14 +200,11 @@ export default function TripMapScreen() {
           longitudeDelta: 0.01,
         }}
       >
-        {segments.map(seg => (
-          <Polyline
-            key={seg.key}
-            coordinates={seg.coords}
-            strokeColor={seg.color}
-            strokeWidth={4}
-          />
-        ))}
+        <Polyline
+          coordinates={routeCoords}
+          strokeColor={C.orange}
+          strokeWidth={4}
+        />
 
         <Marker
           coordinate={{ latitude: first.lat, longitude: first.lon }}
@@ -254,18 +221,24 @@ export default function TripMapScreen() {
       {/* ── Stats card ── */}
       {trip && (
         <View style={styles.statsCard}>
-          <StatItem label="DISTANCE" value={formatDist(trip.totalDist)} />
-          <View style={styles.statsDivider} />
-          <StatItem
-            label="DURATION"
-            value={formatDuration(trip.startTime, trip.endTime ?? null)}
-          />
-          <View style={styles.statsDivider} />
-          <StatItem
-            label="MAX LEAN"
-            value={`${maxLean.toFixed(1)}°`}
-            highlight={maxLean > 50}
-          />
+          <View style={styles.statsRow}>
+            <StatItem label="DISTANCE" value={formatDist(trip.totalDist)} />
+            <View style={styles.statsDivider} />
+            <StatItem
+              label="DURATION"
+              value={formatDuration(trip.startTime, trip.endTime ?? null)}
+            />
+          </View>
+          <View style={styles.statsRowDivider} />
+          <View style={styles.statsRow}>
+            <StatItem label="AVG SPEED" value={formatSpeed(avgSpeed)} />
+            <View style={styles.statsDivider} />
+            <StatItem
+              label="MAX SPEED"
+              value={formatSpeed(maxSpeed)}
+              highlight={maxSpeed * 3.6 > 100}
+            />
+          </View>
         </View>
       )}
     </View>
@@ -317,12 +290,19 @@ const styles = StyleSheet.create({
     borderTopColor: C.border,
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
-    flexDirection: 'row',
-    justifyContent: 'space-around',
-    alignItems: 'center',
     paddingTop: 20,
     paddingBottom: 36,
     paddingHorizontal: 16,
+  },
+  statsRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    alignItems: 'center',
+  },
+  statsRowDivider: {
+    height: 1,
+    backgroundColor: C.border,
+    marginVertical: 16,
   },
   statsDivider: {
     width: 1,

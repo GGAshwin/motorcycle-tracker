@@ -39,12 +39,6 @@ export const telemetryPoints = sqliteTable('telemetry_points', {
   alt:        real('alt'),
   /** Speed in m/s as reported by the GPS chipset. */
   speed:      real('speed'),
-  /**
-   * Averaged lean angle in degrees over the ~1-second GPS window.
-   * Positive = right lean, negative = left lean.
-   * Computed from arctan2(g_y, g_z) at 50 Hz then averaged before insert.
-   */
-  leanAngle:  real('lean_angle'),
   /** Unix ms timestamp from the GPS fix. */
   timestamp:  integer('timestamp').notNull(),
 });
