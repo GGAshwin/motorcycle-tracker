@@ -14,7 +14,10 @@
         "NSLocationWhenInUseUsageDescription": "MotoTrack needs location to record your ride.",
         "NSLocationAlwaysAndWhenInUseUsageDescription": "MotoTrack records your ride in the background.",
         "NSMotionUsageDescription": "MotoTrack uses motion sensors to measure lean angle.",
-        "UIBackgroundModes": ["location", "fetch"]
+        "UIBackgroundModes": [
+          "location",
+          "fetch"
+        ]
       }
     },
     "android": {
@@ -61,7 +64,8 @@
           "isAndroidBackgroundLocationEnabled": true,
           "isAndroidForegroundServiceEnabled": true
         }
-      ]
+      ],
+      "expo-secure-store"
     ],
     "experiments": {
       "typedRoutes": true,

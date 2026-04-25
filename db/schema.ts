@@ -9,7 +9,7 @@
  * arithmetic (duration, filtering by date) stays fast with no string parsing.
  */
 
-import { integer, real, sqliteTable } from 'drizzle-orm/sqlite-core';
+import { integer, real, sqliteTable, text } from 'drizzle-orm/sqlite-core';
 import { relations } from 'drizzle-orm';
 
 // ── trips ────────────────────────────────────────────────────────────────────
@@ -24,6 +24,10 @@ export const trips = sqliteTable('trips', {
   endTime:    integer('end_time'),
   /** Accumulated Haversine distance in metres. */
   totalDist:  real('total_dist').notNull().default(0),
+  /** Sync status flag for Supabase local-first sync. */
+  isSynced:   integer('is_synced', { mode: 'boolean' }).notNull().default(false),
+  /** Public visibility flag for community community routes. */
+  isPublic:   integer('is_public', { mode: 'boolean' }).notNull().default(false),
 });
 
 // ── telemetry_points ─────────────────────────────────────────────────────────
@@ -43,10 +47,26 @@ export const telemetryPoints = sqliteTable('telemetry_points', {
   timestamp:  integer('timestamp').notNull(),
 });
 
+// ── waypoints ────────────────────────────────────────────────────────────────
+
+export const waypoints = sqliteTable('waypoints', {
+  id:         integer('id').primaryKey({ autoIncrement: true }),
+  tripId:     integer('trip_id')
+                .notNull()
+                .references(() => trips.id, { onDelete: 'cascade' }),
+  lat:        real('lat').notNull(),
+  lon:        real('lon').notNull(),
+  type:       integer('type').notNull(), // e.g. 1 for hazard, 2 for viewpoint
+  imageUrl:   text('image_url'),
+  timestamp:  integer('timestamp').notNull(),
+  isSynced:   integer('is_synced', { mode: 'boolean' }).notNull().default(false),
+});
+
 // ── Relations (used by Drizzle's relational query API) ────────────────────────
 
 export const tripsRelations = relations(trips, ({ many }) => ({
   points: many(telemetryPoints),
+  waypoints: many(waypoints),
 }));
 
 export const telemetryPointsRelations = relations(
@@ -59,9 +79,21 @@ export const telemetryPointsRelations = relations(
   })
 );
 
+export const waypointsRelations = relations(
+  waypoints,
+  ({ one }) => ({
+    trip: one(trips, {
+      fields: [waypoints.tripId],
+      references: [trips.id],
+    }),
+  })
+);
+
 // ── Inferred TypeScript types ─────────────────────────────────────────────────
 
 export type Trip           = typeof trips.$inferSelect;
 export type NewTrip        = typeof trips.$inferInsert;
 export type TelemetryPoint = typeof telemetryPoints.$inferSelect;
 export type NewTelemetryPoint = typeof telemetryPoints.$inferInsert;
+export type Waypoint       = typeof waypoints.$inferSelect;
+export type NewWaypoint    = typeof waypoints.$inferInsert;

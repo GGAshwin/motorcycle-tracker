@@ -70,6 +70,17 @@ export default function RootLayout() {
               headerBackTitle: 'History',
             }}
           />
+          <Stack.Screen
+            name="cloud-trip/[id]"
+            options={{
+              headerShown: true,
+              title: 'Community Map',
+              headerStyle: { backgroundColor: '#0D0D0F' },
+              headerTintColor: '#FFFFFF',
+              headerTitleStyle: { fontWeight: '600' },
+              headerBackTitle: 'Back',
+            }}
+          />
         </Stack>
         <StatusBar style="auto" />
       </ThemeProvider>

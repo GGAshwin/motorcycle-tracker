@@ -20,6 +20,7 @@ const MAPPING = {
   'chevron.right': 'chevron-right',
   'gauge': 'speed',
   'clock.arrow.circlepath': 'history',
+  'person.2.fill': 'people',
 } as IconMapping;
 
 /**

@@ -51,15 +51,26 @@ export function initDatabase(): void {
 
   // Each statement is its own call – Android's SQLite driver rejects
   // multi-statement strings passed to execSync.
+  // We use IF NOT EXISTS, and wrap ALTER TABLE in try/catch for existing users
   raw.execSync(
     `CREATE TABLE IF NOT EXISTS trips (
        id         INTEGER PRIMARY KEY AUTOINCREMENT,
        date       INTEGER NOT NULL,
        start_time INTEGER NOT NULL,
        end_time   INTEGER,
-       total_dist REAL    NOT NULL DEFAULT 0
+       total_dist REAL    NOT NULL DEFAULT 0,
+       is_synced  INTEGER NOT NULL DEFAULT 0,
+       is_public  INTEGER NOT NULL DEFAULT 0
      )`
   );
+
+  try {
+    raw.execSync(`ALTER TABLE trips ADD COLUMN is_synced INTEGER NOT NULL DEFAULT 0`);
+    raw.execSync(`ALTER TABLE trips ADD COLUMN is_public INTEGER NOT NULL DEFAULT 0`);
+  } catch (e) {
+    // Columns already exist
+  }
+
   raw.execSync(
     `CREATE TABLE IF NOT EXISTS telemetry_points (
        id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -71,12 +82,27 @@ export function initDatabase(): void {
        timestamp   INTEGER NOT NULL
      )`
   );
+
   raw.execSync(
-    `CREATE INDEX IF NOT EXISTS idx_tp_trip_id  ON telemetry_points(trip_id)`
+    `CREATE TABLE IF NOT EXISTS waypoints (
+       id          INTEGER PRIMARY KEY AUTOINCREMENT,
+       trip_id     INTEGER NOT NULL REFERENCES trips(id) ON DELETE CASCADE,
+       lat         REAL    NOT NULL,
+       lon         REAL    NOT NULL,
+       type        INTEGER NOT NULL,
+       image_url   TEXT,
+       timestamp   INTEGER NOT NULL,
+       is_synced   INTEGER NOT NULL DEFAULT 0
+     )`
   );
-  raw.execSync(
-    `CREATE INDEX IF NOT EXISTS idx_tp_timestamp ON telemetry_points(timestamp)`
-  );
+
+  try {
+    raw.execSync(`ALTER TABLE waypoints ADD COLUMN image_url TEXT`);
+  } catch (e) {}
+
+  raw.execSync(`CREATE INDEX IF NOT EXISTS idx_tp_trip_id  ON telemetry_points(trip_id)`);
+  raw.execSync(`CREATE INDEX IF NOT EXISTS idx_tp_timestamp ON telemetry_points(timestamp)`);
+  raw.execSync(`CREATE INDEX IF NOT EXISTS idx_wp_trip_id  ON waypoints(trip_id)`);
 
   _db = drizzle(raw, { schema });
 }
