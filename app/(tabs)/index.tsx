@@ -11,9 +11,10 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
 import { useFocusEffect } from 'expo-router';
 import { sql } from 'drizzle-orm';
+import * as Location from 'expo-location';
 
 import { getDb } from '@/db/client';
-import { trips } from '@/db/schema';
+import { trips, waypoints } from '@/db/schema';
 import { useCurrentRide } from '@/hooks/useCurrentRide';
 
 const C = {
@@ -33,6 +34,7 @@ export default function RideScreen() {
     speedKmh,
     distance,
     isRecording,
+    currentTripId,
     startRide,
     stopRide,
   } = useCurrentRide();
@@ -96,8 +98,6 @@ export default function RideScreen() {
         pulse.stopAnimation();
         pulse.setValue(1);
         await stopRide();
-        // optionally reload odometer stats here right after stopping, 
-        // though useFocusEffect might cover most cases.
         const result = await getDb()
             .select({
               count: sql<number>`count(*)`,
@@ -122,6 +122,24 @@ export default function RideScreen() {
       setLoading(false);
     }
   }, [isRecording, startRide, stopRide, pulse, startPulse]);
+
+  const handleDropWaypoint = async (type: number) => {
+    if (!currentTripId) return;
+    try {
+      const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+      await getDb().insert(waypoints).values({
+        tripId: currentTripId,
+        lat: loc.coords.latitude,
+        lon: loc.coords.longitude,
+        type: type,
+        timestamp: Date.now(),
+        isSynced: false
+      });
+      console.log(`Dropped waypoint ${type} at`, loc.coords);
+    } catch (err) {
+      console.warn("Failed to drop waypoint", err);
+    }
+  };
 
   const displayDist = odometer.totalDist + (isRecording ? distance : 0);
 
@@ -179,6 +197,19 @@ export default function RideScreen() {
       <View style={styles.actions}>
         {rideError && (
           <Text style={styles.errorText}>{rideError}</Text>
+        )}
+
+        {isRecording && (
+          <View style={{ flexDirection: 'row', gap: 12, marginBottom: 12 }}>
+            <Pressable style={styles.waypointBtn} onPress={() => handleDropWaypoint(1)}>
+              <Text style={{ fontSize: 24 }}>⚠️</Text>
+              <Text style={styles.waypointText}>Hazard</Text>
+            </Pressable>
+            <Pressable style={styles.waypointBtn} onPress={() => handleDropWaypoint(2)}>
+              <Text style={{ fontSize: 24 }}>📷</Text>
+              <Text style={styles.waypointText}>Viewpoint</Text>
+            </Pressable>
+          </View>
         )}
 
         <Pressable
@@ -342,6 +373,21 @@ const styles = StyleSheet.create({
   },
   pressed: {
     opacity: 0.7,
+  },
+  waypointBtn: {
+    flex: 1,
+    backgroundColor: C.surface,
+    padding: 16,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: C.border,
+    alignItems: 'center',
+  },
+  waypointText: {
+    color: C.textPrimary,
+    fontSize: 14,
+    fontWeight: '600',
+    marginTop: 8,
   },
   distanceRow: {
     marginHorizontal: 24,
