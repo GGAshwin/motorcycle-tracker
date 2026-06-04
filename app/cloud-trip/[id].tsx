@@ -1,5 +1,6 @@
 import { supabase } from "@/lib/supabase";
 import { Ionicons } from "@expo/vector-icons";
+import * as FileSystem from "expo-file-system/legacy";
 import { useLocalSearchParams, useNavigation } from "expo-router";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -155,8 +156,17 @@ export default function CloudTripMapScreen() {
         quality: 1,
       });
 
+      // Copy the captured image to a permanent location so it can be shared
+      const fileName = `community-ride-${trip.id}-${Date.now()}.png`;
+      const fileUri = `${FileSystem.documentDirectory}${fileName}`;
+
+      await FileSystem.copyAsync({
+        from: uri,
+        to: fileUri,
+      });
+
       await Share.share({
-        url: uri,
+        url: fileUri,
         message: `Check out @${trip.username}'s epic ride! Distance: ${formatDistKm(trip.total_dist)} km`,
         title: "Community Ride",
       });

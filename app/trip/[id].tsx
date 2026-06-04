@@ -1,5 +1,6 @@
 import { Ionicons } from "@expo/vector-icons";
 import { asc, eq } from "drizzle-orm";
+import * as FileSystem from "expo-file-system/legacy";
 import * as ImageManipulator from "expo-image-manipulator";
 import * as ImagePicker from "expo-image-picker";
 import { useLocalSearchParams, useNavigation } from "expo-router";
@@ -221,8 +222,17 @@ export default function TripMapScreen() {
         quality: 1,
       });
 
+      // Copy the captured image to a permanent location so it can be shared
+      const fileName = `ride-${trip.id}-${Date.now()}.png`;
+      const fileUri = `${FileSystem.documentDirectory}${fileName}`;
+
+      await FileSystem.copyAsync({
+        from: uri,
+        to: fileUri,
+      });
+
       await Share.share({
-        url: uri,
+        url: fileUri,
         message: `Check out my epic ride! Distance: ${formatDistKm(trip.totalDist)} km`,
         title: "My Epic Ride",
       });
