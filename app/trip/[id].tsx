@@ -16,6 +16,7 @@ import {
   View,
 } from "react-native";
 import MapView, { Marker, Polyline } from "react-native-maps";
+import { captureRef } from "react-native-view-shot";
 
 import { getDb } from "@/db/client";
 import type { TelemetryPoint, Trip, Waypoint } from "@/db/schema";
@@ -162,6 +163,7 @@ export default function TripMapScreen() {
   const [selectedPhoto, setSelectedPhoto] = useState<string | null>(null);
   const [username, setUsername] = useState<string | null>(null);
   const [mapExpanded, setMapExpanded] = useState(false);
+  const shareableRef = useRef<View>(null);
 
   // Load username
   useEffect(() => {
@@ -211,9 +213,16 @@ export default function TripMapScreen() {
   };
 
   const handleShare = async () => {
-    if (!trip) return;
+    if (!trip || !shareableRef.current) return;
     try {
+      // Capture the shareable section as an image
+      const uri = await captureRef(shareableRef, {
+        format: "png",
+        quality: 1,
+      });
+
       await Share.share({
+        url: uri,
         message: `Check out my epic ride! Distance: ${formatDistKm(trip.totalDist)} km`,
         title: "My Epic Ride",
       });
@@ -406,200 +415,206 @@ export default function TripMapScreen() {
   return (
     <View style={styles.container}>
       <ScrollView style={styles.scrollView} bounces={false}>
-        {/* ── Header Bar ── */}
-        <View style={styles.header}>
-          <View style={styles.headerIcon}>
-            <Ionicons name="bicycle" size={32} color="#FFF" />
-            <Text style={styles.headerIconLabel}>RIDE</Text>
+        {/* Shareable content wrapper */}
+        <View ref={shareableRef} collapsable={false}>
+          {/* ── Header Bar ── */}
+          <View style={styles.header}>
+            <View style={styles.headerIcon}>
+              <Ionicons name="bicycle" size={32} color="#FFF" />
+              <Text style={styles.headerIconLabel}>RIDE</Text>
+            </View>
+            <View style={styles.headerText}>
+              <Text style={styles.headerTitle}>
+                {riderName}&apos;S EPIC RIDE
+              </Text>
+              <Text style={styles.headerSubtitle}>
+                EPIC RIDE - {formatDateFull(trip?.date ?? Date.now())}
+              </Text>
+            </View>
           </View>
-          <View style={styles.headerText}>
-            <Text style={styles.headerTitle}>{riderName}&apos;S EPIC RIDE</Text>
-            <Text style={styles.headerSubtitle}>
-              EPIC RIDE - {formatDateFull(trip?.date ?? Date.now())}
-            </Text>
-          </View>
-        </View>
 
-        {/* ── Map View ── */}
-        <Pressable
-          style={[styles.mapContainer, mapExpanded && styles.mapExpanded]}
-          onPress={() => !mapExpanded && setMapExpanded(true)}
-          disabled={mapExpanded}
-        >
-          <MapView
-            ref={mapRef}
-            style={StyleSheet.absoluteFillObject}
-            customMapStyle={MAP_STYLE}
-            showsUserLocation={false}
-            showsCompass
-            scrollEnabled={mapExpanded}
-            zoomEnabled={mapExpanded}
-            onLongPress={handleMapLongPress}
-            initialRegion={{
-              latitude: first.lat,
-              longitude: first.lon,
-              latitudeDelta: 0.05,
-              longitudeDelta: 0.05,
-            }}
+          {/* ── Map View ── */}
+          <Pressable
+            style={[styles.mapContainer, mapExpanded && styles.mapExpanded]}
+            onPress={() => !mapExpanded && setMapExpanded(true)}
+            disabled={mapExpanded}
           >
-            <Polyline
-              coordinates={routeCoords}
-              strokeColor={C.routeBlue}
-              strokeWidth={4}
-            />
-
-            {/* Start Marker */}
-            <Marker
-              coordinate={{ latitude: first.lat, longitude: first.lon }}
-              title="Start"
+            <MapView
+              ref={mapRef}
+              style={StyleSheet.absoluteFillObject}
+              customMapStyle={MAP_STYLE}
+              showsUserLocation={false}
+              showsCompass
+              scrollEnabled={mapExpanded}
+              zoomEnabled={mapExpanded}
+              onLongPress={handleMapLongPress}
+              initialRegion={{
+                latitude: first.lat,
+                longitude: first.lon,
+                latitudeDelta: 0.05,
+                longitudeDelta: 0.05,
+              }}
             >
-              <View style={styles.startMarker}>
-                <View style={styles.startMarkerInner} />
-              </View>
-            </Marker>
+              <Polyline
+                coordinates={routeCoords}
+                strokeColor={C.routeBlue}
+                strokeWidth={4}
+              />
 
-            {/* End Marker */}
-            <Marker
-              coordinate={{ latitude: last.lat, longitude: last.lon }}
-              title="End"
-            >
-              <View style={styles.endMarker}>
-                <Ionicons name="location" size={28} color={C.routeBlue} />
-              </View>
-            </Marker>
-
-            {/* Waypoints */}
-            {wpList.map((wp) => (
+              {/* Start Marker */}
               <Marker
-                key={wp.id}
-                coordinate={{ latitude: wp.lat, longitude: wp.lon }}
-                title={
-                  wp.type === 1
-                    ? "Hazard"
-                    : wp.type === 2
-                      ? "Viewpoint"
-                      : "Photo"
-                }
-                onPress={() => {
-                  if (wp.type === 3 && wp.imageUrl) {
-                    setSelectedPhoto(wp.imageUrl);
-                  }
-                }}
+                coordinate={{ latitude: first.lat, longitude: first.lon }}
+                title="Start"
               >
-                <View
-                  style={[
-                    styles.waypointMarker,
-                    {
-                      backgroundColor:
-                        wp.type === 1
-                          ? "#E53935"
-                          : wp.type === 2
-                            ? "#1E88E5"
-                            : C.iconAccent,
-                    },
-                  ]}
-                >
-                  <Ionicons
-                    name={
-                      wp.type === 1
-                        ? "warning"
-                        : wp.type === 2
-                          ? "eye"
-                          : "camera"
-                    }
-                    size={16}
-                    color="#FFF"
-                  />
+                <View style={styles.startMarker}>
+                  <View style={styles.startMarkerInner} />
                 </View>
               </Marker>
-            ))}
-          </MapView>
 
-          {!mapExpanded && (
-            <View style={styles.mapOverlay}>
-              <Text style={styles.mapOverlayText}>Tap to expand</Text>
+              {/* End Marker */}
+              <Marker
+                coordinate={{ latitude: last.lat, longitude: last.lon }}
+                title="End"
+              >
+                <View style={styles.endMarker}>
+                  <Ionicons name="location" size={28} color={C.routeBlue} />
+                </View>
+              </Marker>
+
+              {/* Waypoints */}
+              {wpList.map((wp) => (
+                <Marker
+                  key={wp.id}
+                  coordinate={{ latitude: wp.lat, longitude: wp.lon }}
+                  title={
+                    wp.type === 1
+                      ? "Hazard"
+                      : wp.type === 2
+                        ? "Viewpoint"
+                        : "Photo"
+                  }
+                  onPress={() => {
+                    if (wp.type === 3 && wp.imageUrl) {
+                      setSelectedPhoto(wp.imageUrl);
+                    }
+                  }}
+                >
+                  <View
+                    style={[
+                      styles.waypointMarker,
+                      {
+                        backgroundColor:
+                          wp.type === 1
+                            ? "#E53935"
+                            : wp.type === 2
+                              ? "#1E88E5"
+                              : C.iconAccent,
+                      },
+                    ]}
+                  >
+                    <Ionicons
+                      name={
+                        wp.type === 1
+                          ? "warning"
+                          : wp.type === 2
+                            ? "eye"
+                            : "camera"
+                      }
+                      size={16}
+                      color="#FFF"
+                    />
+                  </View>
+                </Marker>
+              ))}
+            </MapView>
+
+            {!mapExpanded && (
+              <View style={styles.mapOverlay}>
+                <Text style={styles.mapOverlayText}>Tap to expand</Text>
+              </View>
+            )}
+
+            {mapExpanded && (
+              <Pressable
+                style={styles.collapseBtn}
+                onPress={() => setMapExpanded(false)}
+              >
+                <Ionicons name="contract-outline" size={20} color="#FFF" />
+                <Text style={styles.collapseBtnText}>Collapse</Text>
+              </Pressable>
+            )}
+          </Pressable>
+
+          {/* ── Profile Section ── */}
+          <View style={styles.profileSection}>
+            <View style={styles.avatar}>
+              <Ionicons name="person-circle" size={48} color={C.headerBg} />
             </View>
-          )}
-
-          {mapExpanded && (
-            <Pressable
-              style={styles.collapseBtn}
-              onPress={() => setMapExpanded(false)}
-            >
-              <Ionicons name="contract-outline" size={20} color="#FFF" />
-              <Text style={styles.collapseBtnText}>Collapse</Text>
-            </Pressable>
-          )}
-        </Pressable>
-
-        {/* ── Profile Section ── */}
-        <View style={styles.profileSection}>
-          <View style={styles.avatar}>
-            <Ionicons name="person-circle" size={48} color={C.headerBg} />
-          </View>
-          <Text style={styles.profileName}>{riderName}</Text>
-        </View>
-
-        <View style={styles.divider} />
-
-        {/* ── Stats Grid ── */}
-        <View style={styles.statsCard}>
-          {/* Row 1 */}
-          <View style={styles.statsRow}>
-            <StatCell
-              label="Distance"
-              value={formatDistKm(trip?.totalDist ?? 0)}
-              unit="KM"
-            />
-            <View style={styles.verticalDivider} />
-            <StatCell
-              icon="stopwatch-outline"
-              label="Moving Time"
-              value={String(durationMins)}
-              unit="MINS"
-            />
-            <View style={styles.verticalDivider} />
-            <StatCell
-              icon="speedometer-outline"
-              label="Avg Speed"
-              value={formatSpeedKmph(avgSpeed)}
-              unit="KMPH"
-            />
+            <Text style={styles.profileName}>{riderName}</Text>
           </View>
 
           <View style={styles.divider} />
 
-          {/* Row 2 */}
-          <View style={styles.statsRow}>
-            <StatCell
-              icon="flame-outline"
-              label="Max Speed"
-              value={formatSpeedKmph(maxSpeed)}
-              unit="KMPH"
-              labelOnTop={false}
-            />
-            <View style={styles.verticalDivider} />
-            <StatCell
-              icon="time-outline"
-              label="Start Time"
-              value={formatTime(trip?.startTime ?? 0)}
-              unit=""
-              labelOnTop={false}
-            />
-            <View style={styles.verticalDivider} />
-            <StatCell
-              icon="analytics-outline"
-              label="Top Altitude"
-              value={String(
-                Math.round(
-                  points.reduce((max, p) => Math.max(max, p.alt ?? 0), 0),
-                ),
-              )}
-              unit="M"
-              labelOnTop={false}
-            />
+          {/* ── Stats Grid ── */}
+          <View style={styles.statsCard}>
+            {/* Row 1 */}
+            <View style={styles.statsRow}>
+              <StatCell
+                label="Distance"
+                value={formatDistKm(trip?.totalDist ?? 0)}
+                unit="KM"
+              />
+              <View style={styles.verticalDivider} />
+              <StatCell
+                icon="stopwatch-outline"
+                label="Moving Time"
+                value={String(durationMins)}
+                unit="MINS"
+              />
+              <View style={styles.verticalDivider} />
+              <StatCell
+                icon="speedometer-outline"
+                label="Avg Speed"
+                value={formatSpeedKmph(avgSpeed)}
+                unit="KMPH"
+              />
+            </View>
+
+            <View style={styles.divider} />
+
+            {/* Row 2 */}
+            <View style={styles.statsRow}>
+              <StatCell
+                icon="flame-outline"
+                label="Max Speed"
+                value={formatSpeedKmph(maxSpeed)}
+                unit="KMPH"
+                labelOnTop={false}
+              />
+              <View style={styles.verticalDivider} />
+              <StatCell
+                icon="time-outline"
+                label="Start Time"
+                value={formatTime(trip?.startTime ?? 0)}
+                unit=""
+                labelOnTop={false}
+              />
+              <View style={styles.verticalDivider} />
+              <StatCell
+                icon="analytics-outline"
+                label="Top Altitude"
+                value={String(
+                  Math.round(
+                    points.reduce((max, p) => Math.max(max, p.alt ?? 0), 0),
+                  ),
+                )}
+                unit="M"
+                labelOnTop={false}
+              />
+            </View>
           </View>
         </View>
+        {/* End shareable content */}
 
         {/* ── Share/Publish Section ── */}
         <View style={styles.publishSection}>

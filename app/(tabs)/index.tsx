@@ -1,47 +1,110 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { Ionicons } from "@expo/vector-icons";
+import { sql } from "drizzle-orm";
+import { activateKeepAwakeAsync, deactivateKeepAwake } from "expo-keep-awake";
+import { useFocusEffect } from "expo-router";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
+  Animated,
   Pressable,
   StyleSheet,
   Text,
   View,
-  Animated,
-} from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
-import { useFocusEffect } from 'expo-router';
-import { sql } from 'drizzle-orm';
-import * as Location from 'expo-location';
+} from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
+import Svg, { Circle } from "react-native-svg";
 
-import { getDb } from '@/db/client';
-import { trips, waypoints } from '@/db/schema';
-import { useCurrentRide } from '@/hooks/useCurrentRide';
+import { getDb } from "@/db/client";
+import { trips } from "@/db/schema";
+import { useCurrentRide } from "@/hooks/useCurrentRide";
+
+// ── Colors ────────────────────────────────────────────────────────────────────
 
 const C = {
-  bg:         '#0D0D0F',
-  surface:    '#1C1C1E',
-  border:     '#2C2C2E',
-  orange:     '#FF6B00',
-  red:        '#FF3B30',
-  textPrimary:   '#FFFFFF',
-  textSecondary: '#8E8E93',
+  bg: "#0B0B0D",
+  card: "#141417",
+  cardBorder: "#1F1F24",
+  orange: "#FF6D1F",
+  orangeDim: "rgba(255, 109, 31, 0.2)",
+  red: "#FF3B30",
+  green: "#34C759",
+  textPrimary: "#FFFFFF",
+  textSecondary: "#6B6B70",
+  textMuted: "#3A3A3F",
 } as const;
 
-// ── Main screen ───────────────────────────────────────────────────────────────
+// ── Circular Progress Ring ────────────────────────────────────────────────────
+
+const GAUGE_SIZE = 240;
+const STROKE_WIDTH = 8;
+const RADIUS = (GAUGE_SIZE - STROKE_WIDTH) / 2;
+const CIRCUMFERENCE = 2 * Math.PI * RADIUS;
+
+function SpeedGauge({
+  speed,
+  maxSpeed = 180,
+}: {
+  speed: number;
+  maxSpeed?: number;
+}) {
+  const progress = Math.min(speed / maxSpeed, 1);
+  const strokeDashoffset = CIRCUMFERENCE * (1 - progress * 0.75);
+
+  return (
+    <View style={styles.gaugeContainer}>
+      <Svg width={GAUGE_SIZE} height={GAUGE_SIZE} style={styles.gaugeSvg}>
+        {/* Background ring */}
+        <Circle
+          cx={GAUGE_SIZE / 2}
+          cy={GAUGE_SIZE / 2}
+          r={RADIUS}
+          stroke={C.cardBorder}
+          strokeWidth={STROKE_WIDTH}
+          fill="none"
+          strokeLinecap="round"
+          strokeDasharray={`${CIRCUMFERENCE * 0.75} ${CIRCUMFERENCE * 0.25}`}
+          rotation={135}
+          origin={`${GAUGE_SIZE / 2}, ${GAUGE_SIZE / 2}`}
+        />
+        {/* Progress ring */}
+        <Circle
+          cx={GAUGE_SIZE / 2}
+          cy={GAUGE_SIZE / 2}
+          r={RADIUS}
+          stroke={C.orange}
+          strokeWidth={STROKE_WIDTH}
+          fill="none"
+          strokeLinecap="round"
+          strokeDasharray={`${CIRCUMFERENCE * 0.75} ${CIRCUMFERENCE * 0.25}`}
+          strokeDashoffset={strokeDashoffset}
+          rotation={135}
+          origin={`${GAUGE_SIZE / 2}, ${GAUGE_SIZE / 2}`}
+        />
+      </Svg>
+
+      {/* Speed display in center */}
+      <View style={styles.speedDisplay}>
+        <Text style={styles.speedValue}>
+          {speed < 1 ? "0" : speed.toFixed(0)}
+        </Text>
+        <Text style={styles.speedUnit}>km/h</Text>
+      </View>
+
+      {/* Scale markers */}
+      <Text style={styles.scaleMin}>0</Text>
+      <Text style={styles.scaleMax}>{maxSpeed}</Text>
+    </View>
+  );
+}
+
+// ── Main Screen ───────────────────────────────────────────────────────────────
 
 export default function RideScreen() {
-  const {
-    speedKmh,
-    distance,
-    isRecording,
-    currentTripId,
-    startRide,
-    stopRide,
-  } = useCurrentRide();
+  const { speedKmh, distance, isRecording, startRide, stopRide } =
+    useCurrentRide();
 
-  const [loading, setLoading]     = useState(false);
+  const [loading, setLoading] = useState(false);
   const [rideError, setRideError] = useState<string | null>(null);
-  
   const [odometer, setOdometer] = useState({ count: 0, totalDist: 0 });
 
   useFocusEffect(
@@ -52,7 +115,7 @@ export default function RideScreen() {
           const result = await getDb()
             .select({
               count: sql<number>`count(*)`,
-              totalDist: sql<number>`sum(${trips.totalDist})`
+              totalDist: sql<number>`sum(${trips.totalDist})`,
             })
             .from(trips);
           if (active && result[0]) {
@@ -62,31 +125,41 @@ export default function RideScreen() {
             });
           }
         } catch (err) {
-          console.error('Failed to fetch odometer data:', err);
+          console.error("Failed to fetch odometer data:", err);
         }
       })();
-      return () => { active = false; };
-    }, [])
+      return () => {
+        active = false;
+      };
+    }, []),
   );
 
-  // Keep the screen on while recording; release when done.
   useEffect(() => {
     if (isRecording) {
       activateKeepAwakeAsync();
     } else {
       deactivateKeepAwake();
     }
-    return () => { deactivateKeepAwake(); };
+    return () => {
+      deactivateKeepAwake();
+    };
   }, [isRecording]);
 
-  // Pulse animation for the recording dot
   const pulse = useRef(new Animated.Value(1)).current;
   const startPulse = useCallback(() => {
     Animated.loop(
       Animated.sequence([
-        Animated.timing(pulse, { toValue: 0.2, duration: 800, useNativeDriver: true }),
-        Animated.timing(pulse, { toValue: 1,   duration: 800, useNativeDriver: true }),
-      ])
+        Animated.timing(pulse, {
+          toValue: 0.3,
+          duration: 800,
+          useNativeDriver: true,
+        }),
+        Animated.timing(pulse, {
+          toValue: 1,
+          duration: 800,
+          useNativeDriver: true,
+        }),
+      ]),
     ).start();
   }, [pulse]);
 
@@ -99,11 +172,11 @@ export default function RideScreen() {
         pulse.setValue(1);
         await stopRide();
         const result = await getDb()
-            .select({
-              count: sql<number>`count(*)`,
-              totalDist: sql<number>`sum(${trips.totalDist})`
-            })
-            .from(trips);
+          .select({
+            count: sql<number>`count(*)`,
+            totalDist: sql<number>`sum(${trips.totalDist})`,
+          })
+          .from(trips);
         if (result[0]) {
           setOdometer({
             count: result[0].count || 0,
@@ -117,37 +190,25 @@ export default function RideScreen() {
     } catch (err) {
       pulse.stopAnimation();
       pulse.setValue(1);
-      setRideError(err instanceof Error ? err.message : 'Something went wrong');
+      setRideError(err instanceof Error ? err.message : "Something went wrong");
     } finally {
       setLoading(false);
     }
   }, [isRecording, startRide, stopRide, pulse, startPulse]);
 
-  const handleDropWaypoint = async (type: number) => {
-    if (!currentTripId) return;
-    try {
-      const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-      await getDb().insert(waypoints).values({
-        tripId: currentTripId,
-        lat: loc.coords.latitude,
-        lon: loc.coords.longitude,
-        type: type,
-        timestamp: Date.now(),
-        isSynced: false
-      });
-      console.log(`Dropped waypoint ${type} at`, loc.coords);
-    } catch (err) {
-      console.warn("Failed to drop waypoint", err);
-    }
-  };
-
-  const displayDist = odometer.totalDist + (isRecording ? distance : 0);
+  const totalDist = odometer.totalDist + (isRecording ? distance : 0);
 
   return (
-    <SafeAreaView style={styles.safe}>
-      {/* ── Header ── */}
+    <SafeAreaView style={styles.container}>
+      {/* Header */}
       <View style={styles.header}>
-        <Text style={styles.appName}>MotoTrack</Text>
+        <View style={styles.brand}>
+          <View style={styles.brandIcon}>
+            <Ionicons name="bicycle" size={20} color={C.orange} />
+          </View>
+          <Text style={styles.brandName}>MotoTrack</Text>
+        </View>
+
         {isRecording && (
           <View style={styles.recBadge}>
             <Animated.View style={[styles.recDot, { opacity: pulse }]} />
@@ -156,78 +217,78 @@ export default function RideScreen() {
         )}
       </View>
 
-      {/* ── Speed ── */}
-      <View style={styles.speedCard}>
-        <Text style={styles.speedNumber}>
-          {speedKmh < 1 ? '0' : speedKmh.toFixed(0)}
-        </Text>
-        <Text style={styles.speedUnit}>km/h</Text>
+      {/* Speed Gauge */}
+      <View style={styles.gaugeWrapper}>
+        <SpeedGauge speed={speedKmh} />
       </View>
 
-      {/* ── Odometer UI ── */}
-      <View style={styles.odometerContainer}>
-        <View style={styles.odometerBox}>
-          <Text style={styles.odometerLabel}>TRIPS</Text>
-          <Text style={styles.odometerValue}>{odometer.count}</Text>
+      {/* Stats Row */}
+      <View style={styles.statsRow}>
+        <View style={styles.statBox}>
+          <Ionicons name="flag-outline" size={18} color={C.orange} />
+          <Text style={styles.statValue}>{odometer.count}</Text>
+          <Text style={styles.statLabel}>Trips</Text>
         </View>
-        <View style={styles.odometerDivider} />
-        <View style={styles.odometerBox}>
-          <Text style={styles.odometerLabel}>TOTAL DIST</Text>
-          <Text style={styles.odometerValue}>
-            {displayDist < 1000
-              ? `${Math.round(displayDist)} m`
-              : `${(displayDist / 1000).toFixed(1)} km`}
+
+        <View style={styles.statDivider} />
+
+        <View style={styles.statBox}>
+          <Ionicons name="speedometer-outline" size={18} color={C.orange} />
+          <Text style={styles.statValue}>
+            {totalDist < 1000
+              ? `${Math.round(totalDist)}m`
+              : `${(totalDist / 1000).toFixed(1)}km`}
           </Text>
+          <Text style={styles.statLabel}>Total Distance</Text>
         </View>
       </View>
 
-      {/* ── Distance (only visible while recording) ── */}
-      {isRecording && (
-        <View style={styles.distanceRow}>
-          <Text style={styles.distanceLabel}>THIS RIDE</Text>
-          <Text style={styles.distanceValue}>
-            {distance < 1000
-              ? `${Math.round(distance)} m`
-              : `${(distance / 1000).toFixed(2)} km`}
-          </Text>
-        </View>
-      )}
+      {/* Bottom Actions */}
+      <View style={styles.bottomSection}>
+        {rideError && <Text style={styles.errorText}>{rideError}</Text>}
 
-      {/* ── Actions ── */}
-      <View style={styles.actions}>
-        {rideError && (
-          <Text style={styles.errorText}>{rideError}</Text>
-        )}
-
+        {/* Current Ride Distance */}
         {isRecording && (
-          <View style={{ flexDirection: 'row', gap: 12, marginBottom: 12 }}>
-            <Pressable style={styles.waypointBtn} onPress={() => handleDropWaypoint(1)}>
-              <Text style={{ fontSize: 24 }}>⚠️</Text>
-              <Text style={styles.waypointText}>Hazard</Text>
-            </Pressable>
-            <Pressable style={styles.waypointBtn} onPress={() => handleDropWaypoint(2)}>
-              <Text style={{ fontSize: 24 }}>📷</Text>
-              <Text style={styles.waypointText}>Viewpoint</Text>
-            </Pressable>
+          <View style={styles.currentRide}>
+            <View style={styles.currentRideLeft}>
+              <Text style={styles.currentRideTitle}>This Ride</Text>
+              <Text style={styles.currentRideMeta}>
+                {distance < 1000
+                  ? `${Math.round(distance)} m`
+                  : `${(distance / 1000).toFixed(2)} km`}
+              </Text>
+            </View>
+            <View style={styles.currentRideLive}>
+              <Animated.View style={[styles.liveDot, { opacity: pulse }]} />
+              <Text style={styles.liveText}>LIVE</Text>
+            </View>
           </View>
         )}
 
         <Pressable
           style={({ pressed }) => [
-            styles.btnPrimary,
-            isRecording && styles.btnStop,
-            loading && styles.btnDisabled,
-            pressed && !loading && styles.pressed,
+            styles.mainBtn,
+            isRecording ? styles.mainBtnStop : styles.mainBtnStart,
+            loading && styles.mainBtnDisabled,
+            pressed && !loading && styles.btnPressed,
           ]}
           onPress={handleToggle}
           disabled={loading}
         >
-          {loading
-            ? <ActivityIndicator color="#fff" />
-            : <Text style={styles.btnPrimaryText}>
-                {isRecording ? 'Stop Ride' : 'Start Ride'}
+          {loading ? (
+            <ActivityIndicator color="#FFF" size="small" />
+          ) : (
+            <>
+              <Text style={styles.mainBtnText}>
+                {isRecording ? "End Ride" : "Start Ride"}
               </Text>
-          }
+              <Ionicons
+                name={isRecording ? "stop-circle" : "play-circle"}
+                size={24}
+                color="#FFF"
+              />
+            </>
+          )}
         </Pressable>
       </View>
     </SafeAreaView>
@@ -237,34 +298,45 @@ export default function RideScreen() {
 // ── Styles ────────────────────────────────────────────────────────────────────
 
 const styles = StyleSheet.create({
-  safe: {
+  container: {
     flex: 1,
     backgroundColor: C.bg,
   },
 
-  // Header
   header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: 24,
-    paddingTop: 16,
-    paddingBottom: 8,
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingHorizontal: 20,
+    paddingVertical: 16,
   },
-  appName: {
+  brand: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  brandIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    backgroundColor: C.orangeDim,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  brandName: {
+    fontSize: 20,
+    fontWeight: "700",
     color: C.textPrimary,
-    fontSize: 18,
-    fontWeight: '700',
-    letterSpacing: 1,
+    letterSpacing: 0.5,
   },
   recBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: "row",
+    alignItems: "center",
     gap: 6,
-    backgroundColor: '#3A0A0A',
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 12,
+    backgroundColor: "rgba(255,59,48,0.12)",
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 20,
   },
   recDot: {
     width: 8,
@@ -273,145 +345,165 @@ const styles = StyleSheet.create({
     backgroundColor: C.red,
   },
   recText: {
-    color: C.red,
     fontSize: 12,
-    fontWeight: '700',
+    fontWeight: "700",
+    color: C.red,
     letterSpacing: 1,
   },
 
-  // Speed
-  speedCard: {
-    marginHorizontal: 24,
-    marginTop: 32,
-    backgroundColor: C.surface,
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: C.border,
-    paddingVertical: 48,
-    alignItems: 'center',
+  gaugeWrapper: {
+    alignItems: "center",
+    paddingVertical: 20,
   },
-  speedNumber: {
+  gaugeContainer: {
+    width: GAUGE_SIZE,
+    height: GAUGE_SIZE,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  gaugeSvg: {
+    position: "absolute",
+  },
+  speedDisplay: {
+    alignItems: "center",
+  },
+  speedValue: {
+    fontSize: 72,
+    fontWeight: "200",
     color: C.textPrimary,
-    fontSize: 96,
-    fontWeight: '200',
-    lineHeight: 96,
-    fontVariant: ['tabular-nums'],
+    fontVariant: ["tabular-nums"],
   },
   speedUnit: {
-    color: C.textSecondary,
     fontSize: 16,
-    fontWeight: '500',
+    fontWeight: "500",
+    color: C.textSecondary,
     letterSpacing: 2,
-    marginTop: 8,
+    marginTop: -4,
+  },
+  scaleMin: {
+    position: "absolute",
+    bottom: 30,
+    left: 30,
+    fontSize: 12,
+    color: C.textMuted,
+    fontWeight: "500",
+  },
+  scaleMax: {
+    position: "absolute",
+    bottom: 30,
+    right: 30,
+    fontSize: 12,
+    color: C.textMuted,
+    fontWeight: "500",
   },
 
-  // Odometer
-  odometerContainer: {
-    flexDirection: 'row',
-    marginHorizontal: 24,
-    marginTop: 16,
-    backgroundColor: '#161618',
+  statsRow: {
+    flexDirection: "row",
+    marginHorizontal: 20,
+    backgroundColor: C.card,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: C.cardBorder,
+    paddingVertical: 20,
+  },
+  statBox: {
+    flex: 1,
+    alignItems: "center",
+    gap: 6,
+  },
+  statValue: {
+    fontSize: 20,
+    fontWeight: "600",
+    color: C.textPrimary,
+    fontVariant: ["tabular-nums"],
+  },
+  statLabel: {
+    fontSize: 12,
+    color: C.textSecondary,
+    fontWeight: "500",
+  },
+  statDivider: {
+    width: 1,
+    backgroundColor: C.cardBorder,
+  },
+
+  currentRide: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    backgroundColor: C.card,
     borderRadius: 14,
     borderWidth: 1,
-    borderColor: C.border,
-    paddingVertical: 16,
-    justifyContent: 'space-evenly',
-    alignItems: 'center',
+    borderColor: C.cardBorder,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
   },
-  odometerBox: {
-    alignItems: 'center',
-    flex: 1,
+  currentRideLeft: {
+    gap: 4,
   },
-  odometerLabel: {
-    color: C.textSecondary,
-    fontSize: 10,
-    fontWeight: '700',
-    letterSpacing: 1.2,
-    marginBottom: 4,
-  },
-  odometerValue: {
+  currentRideTitle: {
+    fontSize: 15,
+    fontWeight: "600",
     color: C.textPrimary,
-    fontSize: 20,
-    fontWeight: '300',
-    fontVariant: ['tabular-nums'],
   },
-  odometerDivider: {
-    width: 1,
-    height: 24,
-    backgroundColor: C.border,
+  currentRideMeta: {
+    fontSize: 13,
+    color: C.textSecondary,
+  },
+  currentRideLive: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  liveDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: C.green,
+  },
+  liveText: {
+    fontSize: 12,
+    fontWeight: "600",
+    color: C.green,
+    letterSpacing: 0.5,
   },
 
-  // Actions
-  actions: {
-    marginHorizontal: 24,
-    marginTop: 'auto',
+  bottomSection: {
+    marginTop: "auto",
+    paddingHorizontal: 20,
     paddingBottom: 24,
     gap: 12,
   },
-  btnPrimary: {
-    backgroundColor: C.orange,
-    borderRadius: 14,
-    paddingVertical: 18,
-    alignItems: 'center',
-  },
-  btnStop: {
-    backgroundColor: C.red,
-  },
-  btnPrimaryText: {
-    color: '#FFFFFF',
-    fontSize: 17,
-    fontWeight: '700',
-    letterSpacing: 0.5,
-  },
-  btnDisabled: {
-    opacity: 0.5,
-  },
   errorText: {
     color: C.red,
-    fontSize: 13,
-    textAlign: 'center',
-  },
-  pressed: {
-    opacity: 0.7,
-  },
-  waypointBtn: {
-    flex: 1,
-    backgroundColor: C.surface,
-    padding: 16,
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: C.border,
-    alignItems: 'center',
-  },
-  waypointText: {
-    color: C.textPrimary,
     fontSize: 14,
-    fontWeight: '600',
-    marginTop: 8,
+    textAlign: "center",
+    marginBottom: 4,
   },
-  distanceRow: {
-    marginHorizontal: 24,
-    marginTop: 16,
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'baseline',
-    backgroundColor: C.surface,
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: C.border,
-    paddingHorizontal: 20,
-    paddingVertical: 14,
+  mainBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 10,
+    paddingVertical: 18,
+    borderRadius: 16,
   },
-  distanceLabel: {
-    color: C.orange,
-    fontSize: 11,
-    fontWeight: '700',
-    letterSpacing: 1.5,
+  mainBtnStart: {
+    backgroundColor: C.orange,
   },
-  distanceValue: {
-    color: C.textPrimary,
-    fontSize: 24,
-    fontWeight: '300',
-    fontVariant: ['tabular-nums'],
+  mainBtnStop: {
+    backgroundColor: C.red,
+  },
+  mainBtnDisabled: {
+    opacity: 0.5,
+  },
+  mainBtnText: {
+    fontSize: 18,
+    fontWeight: "700",
+    color: "#FFF",
+  },
+  btnPressed: {
+    opacity: 0.8,
+    transform: [{ scale: 0.98 }],
   },
 });
