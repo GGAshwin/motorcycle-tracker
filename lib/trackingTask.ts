@@ -23,22 +23,25 @@
  * background task headless launch.
  */
 
-import * as TaskManager from 'expo-task-manager';
-import * as Location from 'expo-location';
-import { eq } from 'drizzle-orm';
+import { eq } from "drizzle-orm";
+import * as Location from "expo-location";
+import * as TaskManager from "expo-task-manager";
 
-import { getDb, getRawDb, initDatabase } from '../db/client';
-import { trips, telemetryPoints } from '../db/schema';
+import { getDb, getRawDb, initDatabase } from "../db/client";
+import { telemetryPoints, trips } from "../db/schema";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-export const TRACKING_TASK_NAME = 'REGISTERED_TRACKING_TASK';
+export const TRACKING_TASK_NAME = "REGISTERED_TRACKING_TASK";
 
 /** How often the batch is flushed to SQLite (milliseconds). */
 const FLUSH_INTERVAL_MS = 10_000;
 
 /** Maximum pending points before an emergency flush is forced. */
 const EMERGENCY_FLUSH_THRESHOLD = 150;
+
+/** Minimum points before time-based flush triggers (avoid flushing single points). */
+const MIN_POINTS_FOR_TIME_FLUSH = 5;
 
 /**
  * Minimum GPS speed (m/s) required before a fix contributes to total distance.
@@ -75,6 +78,7 @@ let pendingPoints: PendingPoint[] = [];
 let currentTripId: number | null = null;
 let tripDistMetres = 0;
 let lastCoord: { lat: number; lon: number } | null = null;
+let lastFlushTime = 0;
 
 let batchFlushTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -98,7 +102,7 @@ function emit(patch: Partial<LiveRideState>): void {
  * Returns an unsubscribe function — call it in the hook's cleanup effect.
  */
 export function subscribeToLiveState(
-  listener: (s: LiveRideState) => void
+  listener: (s: LiveRideState) => void,
 ): () => void {
   stateListeners.add(listener);
   listener(liveState); // immediate emit of current state
@@ -108,8 +112,10 @@ export function subscribeToLiveState(
 // ── Haversine distance ────────────────────────────────────────────────────────
 
 function haversineMetres(
-  lat1: number, lon1: number,
-  lat2: number, lon2: number
+  lat1: number,
+  lon1: number,
+  lat2: number,
+  lon2: number,
 ): number {
   const R = 6_371_000;
   const φ1 = (lat1 * Math.PI) / 180;
@@ -117,8 +123,7 @@ function haversineMetres(
   const Δφ = ((lat2 - lat1) * Math.PI) / 180;
   const Δλ = ((lon2 - lon1) * Math.PI) / 180;
   const a =
-    Math.sin(Δφ / 2) ** 2 +
-    Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ / 2) ** 2;
+    Math.sin(Δφ / 2) ** 2 + Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ / 2) ** 2;
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
@@ -130,16 +135,18 @@ async function flushBatch(): Promise<void> {
   const batch = pendingPoints.splice(0, pendingPoints.length);
 
   try {
-    await getDb().insert(telemetryPoints).values(
-      batch.map((p) => ({
-        tripId:    p.tripId,
-        lat:       p.lat,
-        lon:       p.lon,
-        alt:       p.alt   ?? undefined,
-        speed:     p.speed ?? undefined,
-        timestamp: p.timestamp,
-      }))
-    );
+    await getDb()
+      .insert(telemetryPoints)
+      .values(
+        batch.map((p) => ({
+          tripId: p.tripId,
+          lat: p.lat,
+          lon: p.lon,
+          alt: p.alt ?? undefined,
+          speed: p.speed ?? undefined,
+          timestamp: p.timestamp,
+        })),
+      );
 
     if (currentTripId !== null) {
       await getDb()
@@ -148,7 +155,7 @@ async function flushBatch(): Promise<void> {
         .where(eq(trips.id, currentTripId));
     }
   } catch (err) {
-    console.error('[MotoTrack] flushBatch error:', err);
+    console.error("[MotoTrack] flushBatch error:", err);
     // Re-queue only if the buffer hasn't grown dangerously large.
     if (pendingPoints.length < EMERGENCY_FLUSH_THRESHOLD) {
       pendingPoints.unshift(...batch);
@@ -167,43 +174,64 @@ TaskManager.defineTask(
     locations: Location.LocationObject[];
   }>) => {
     if (error) {
-      console.error('[MotoTrack] Task error:', error.message);
+      console.error("[MotoTrack] Task error:", error.message);
       return;
     }
     if (!data?.locations?.length || currentTripId === null) return;
 
+    // Ensure DB is ready for background writes
+    try {
+      initDatabase();
+    } catch (e) {
+      console.error("[MotoTrack] Background DB init failed:", e);
+    }
+
     for (const loc of data.locations) {
-      const { latitude: lat, longitude: lon, altitude: alt, speed } =
-        loc.coords;
+      const {
+        latitude: lat,
+        longitude: lon,
+        altitude: alt,
+        speed,
+      } = loc.coords;
 
       // Accumulate trip distance using Haversine, but only when the GPS
       // reports actual movement. GPS position is noisy (~3-5 m per fix),
       // so standing still or walking would otherwise inflate the total.
       if (lastCoord && speed !== null && speed >= MIN_MOVING_SPEED_MS) {
         tripDistMetres += haversineMetres(
-          lastCoord.lat, lastCoord.lon,
-          lat, lon
+          lastCoord.lat,
+          lastCoord.lon,
+          lat,
+          lon,
         );
       }
       lastCoord = { lat, lon };
 
       pendingPoints.push({
-        tripId:    currentTripId,
+        tripId: currentTripId,
         lat,
         lon,
-        alt:       alt   ?? null,
-        speed:     speed ?? null,
+        alt: alt ?? null,
+        speed: speed ?? null,
         timestamp: loc.timestamp,
       });
 
       emit({ speed: speed ?? 0, distance: tripDistMetres });
-
-      // Safety valve: flush immediately if buffer grows unexpectedly large.
-      if (pendingPoints.length >= EMERGENCY_FLUSH_THRESHOLD) {
-        await flushBatch();
-      }
     }
-  }
+
+    // Flush based on time elapsed OR buffer size (works in background unlike setInterval)
+    const now = Date.now();
+    const timeElapsed = now - lastFlushTime;
+    const shouldFlush =
+      pendingPoints.length >= EMERGENCY_FLUSH_THRESHOLD ||
+      (timeElapsed >= FLUSH_INTERVAL_MS &&
+        pendingPoints.length >= MIN_POINTS_FOR_TIME_FLUSH);
+
+    if (shouldFlush) {
+      await flushBatch();
+      lastFlushTime = now;
+    }
+  },
 );
 
 // ── Trip lifecycle ────────────────────────────────────────────────────────────
@@ -219,17 +247,19 @@ export async function startTrip(): Promise<number> {
   initDatabase();
 
   // Android requires foreground permission before background can even be asked.
-  const { status: fgStatus } = await Location.requestForegroundPermissionsAsync();
-  if (fgStatus !== 'granted') {
-    throw new Error('Location permission is required to record rides.');
+  const { status: fgStatus } =
+    await Location.requestForegroundPermissionsAsync();
+  if (fgStatus !== "granted") {
+    throw new Error("Location permission is required to record rides.");
   }
 
   // Background permission is best-effort: grants location when screen is off.
   // Falls back to foreground-service-only if denied (works in Expo Go).
   let backgroundGranted = false;
   try {
-    const { status: bgStatus } = await Location.requestBackgroundPermissionsAsync();
-    backgroundGranted = bgStatus === 'granted';
+    const { status: bgStatus } =
+      await Location.requestBackgroundPermissionsAsync();
+    backgroundGranted = bgStatus === "granted";
   } catch {
     // requestBackgroundPermissionsAsync can throw on some Expo Go builds.
   }
@@ -237,29 +267,30 @@ export async function startTrip(): Promise<number> {
   const now = Date.now();
 
   const result = getRawDb().runSync(
-    'INSERT INTO trips (date, start_time, total_dist) VALUES (?, ?, 0)',
-    [now, now]
+    "INSERT INTO trips (date, start_time, total_dist) VALUES (?, ?, 0)",
+    [now, now],
   );
   const newTripId = result.lastInsertRowId;
 
-  if (!newTripId) throw new Error('[MotoTrack] Failed to create trip record');
+  if (!newTripId) throw new Error("[MotoTrack] Failed to create trip record");
 
-  currentTripId  = newTripId;
+  currentTripId = newTripId;
   tripDistMetres = 0;
-  lastCoord      = null;
-  pendingPoints  = [];
+  lastCoord = null;
+  pendingPoints = [];
+  lastFlushTime = Date.now();
 
   batchFlushTimer = setInterval(flushBatch, FLUSH_INTERVAL_MS);
 
   await Location.startLocationUpdatesAsync(TRACKING_TASK_NAME, {
-    accuracy:          Location.Accuracy.BestForNavigation,
-    timeInterval:      1000,
-    distanceInterval:  0,
+    accuracy: Location.Accuracy.BestForNavigation,
+    timeInterval: 1000,
+    distanceInterval: 0,
     showsBackgroundLocationIndicator: backgroundGranted,
     foregroundService: {
-      notificationTitle: 'MotoTrack – Recording',
-      notificationBody:  'Tap to return to the app.',
-      notificationColor: '#FF6B00',
+      notificationTitle: "MotoTrack – Recording",
+      notificationBody: "Tap to return to the app.",
+      notificationColor: "#FF6B00",
     },
   });
 
@@ -287,9 +318,9 @@ export async function stopTrip(): Promise<void> {
     .set({ endTime: Date.now(), totalDist: tripDistMetres })
     .where(eq(trips.id, currentTripId));
 
-  currentTripId  = null;
+  currentTripId = null;
   tripDistMetres = 0;
-  lastCoord      = null;
+  lastCoord = null;
 
   emit({ isRecording: false, currentTripId: null, speed: 0, distance: 0 });
 }
