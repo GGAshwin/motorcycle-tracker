@@ -35,7 +35,8 @@
         "android.permission.ACCESS_BACKGROUND_LOCATION",
         "android.permission.FOREGROUND_SERVICE",
         "android.permission.FOREGROUND_SERVICE_LOCATION"
-      ]
+      ],
+      "package": "com.playmaker159.biketracker"
     },
     "web": {
       "output": "static",
@@ -70,6 +71,12 @@
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "70729a0b-5904-414f-bd80-574122949097"
+      }
     }
   }
 }
