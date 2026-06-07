@@ -16,9 +16,12 @@
         "NSMotionUsageDescription": "MotoTrack uses motion sensors to measure lean angle.",
         "UIBackgroundModes": [
           "location",
+          "fetch",
+          "location",
           "fetch"
         ]
-      }
+      },
+      "bundleIdentifier": "com.playmaker159.biketracker"
     },
     "android": {
       "adaptiveIcon": {
