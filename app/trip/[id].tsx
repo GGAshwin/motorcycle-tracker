@@ -16,7 +16,14 @@ import {
   Text,
   View,
 } from "react-native";
-import MapView, { Marker, Polyline } from "react-native-maps";
+import {
+  Camera,
+  GeoJSONSource,
+  Layer,
+  Map,
+  Marker,
+  type CameraRef,
+} from "@maplibre/maplibre-react-native";
 import { captureRef } from "react-native-view-shot";
 
 import { getDb } from "@/db/client";
@@ -45,12 +52,7 @@ const C = {
   textSecondary: "#8E8E93",
 } as const;
 
-// ── Map style (lighter for new design) ────────────────────────────────────────
-
-const MAP_STYLE = [
-  { featureType: "poi", stylers: [{ visibility: "off" }] },
-  { featureType: "transit", stylers: [{ visibility: "off" }] },
-];
+const OSM_STYLE = "https://tiles.openfreemap.org/styles/liberty";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -155,7 +157,7 @@ export default function TripMapScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const numericId = parseInt(id, 10);
   const navigation = useNavigation();
-  const mapRef = useRef<MapView>(null);
+  const cameraRef = useRef<CameraRef>(null);
 
   const [trip, setTrip] = useState<Trip | null>(null);
   const [points, setPoints] = useState<TelemetryPoint[]>([]);
@@ -243,7 +245,7 @@ export default function TripMapScreen() {
 
   const handleMapLongPress = async (e: any) => {
     if (!trip) return;
-    const { latitude, longitude } = e.nativeEvent.coordinate;
+    const [longitude, latitude] = e.nativeEvent.lngLat;
 
     let result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: "images",
@@ -356,20 +358,26 @@ export default function TripMapScreen() {
   // ── Fit map to route after points load ─────────────────────────────────────
 
   useEffect(() => {
-    if (points.length < 2 || !mapRef.current) return;
+    if (points.length < 2 || !cameraRef.current) return;
+    const lngs = points.map((p) => p.lon);
+    const lats = points.map((p) => p.lat);
     setTimeout(() => {
-      mapRef.current?.fitToCoordinates(
-        points.map((p) => ({ latitude: p.lat, longitude: p.lon })),
-        {
-          edgePadding: { top: 40, right: 40, bottom: 40, left: 40 },
-          animated: true,
-        },
+      cameraRef.current?.fitBounds(
+        [Math.min(...lngs), Math.min(...lats), Math.max(...lngs), Math.max(...lats)],
+        { padding: { top: 40, right: 40, bottom: 40, left: 40 }, duration: 300 },
       );
     }, 100);
   }, [points, mapExpanded]);
 
-  const routeCoords = useMemo(
-    () => points.map((p) => ({ latitude: p.lat, longitude: p.lon })),
+  const routeGeoJSON = useMemo<GeoJSON.Feature>(
+    () => ({
+      type: "Feature",
+      geometry: {
+        type: "LineString",
+        coordinates: points.map((p) => [p.lon, p.lat]),
+      },
+      properties: {},
+    }),
     [points],
   );
 
@@ -449,43 +457,38 @@ export default function TripMapScreen() {
             onPress={() => !mapExpanded && setMapExpanded(true)}
             disabled={mapExpanded}
           >
-            <MapView
-              ref={mapRef}
+            <Map
               style={StyleSheet.absoluteFillObject}
-              customMapStyle={MAP_STYLE}
-              showsUserLocation={false}
-              showsCompass
-              scrollEnabled={mapExpanded}
-              zoomEnabled={mapExpanded}
+              mapStyle={OSM_STYLE}
+              dragPan={mapExpanded}
+              touchZoom={mapExpanded}
               onLongPress={handleMapLongPress}
-              initialRegion={{
-                latitude: first.lat,
-                longitude: first.lon,
-                latitudeDelta: 0.05,
-                longitudeDelta: 0.05,
-              }}
             >
-              <Polyline
-                coordinates={routeCoords}
-                strokeColor={C.routeBlue}
-                strokeWidth={4}
+              <Camera
+                ref={cameraRef}
+                initialViewState={{
+                  center: [first.lon, first.lat],
+                  zoom: 12,
+                }}
               />
 
+              <GeoJSONSource id="route" data={routeGeoJSON}>
+                <Layer
+                  id="route-line"
+                  type="line"
+                  paint={{ "line-color": C.routeBlue, "line-width": 4 }}
+                />
+              </GeoJSONSource>
+
               {/* Start Marker */}
-              <Marker
-                coordinate={{ latitude: first.lat, longitude: first.lon }}
-                title="Start"
-              >
+              <Marker lngLat={[first.lon, first.lat]}>
                 <View style={styles.startMarker}>
                   <View style={styles.startMarkerInner} />
                 </View>
               </Marker>
 
               {/* End Marker */}
-              <Marker
-                coordinate={{ latitude: last.lat, longitude: last.lon }}
-                title="End"
-              >
+              <Marker lngLat={[last.lon, last.lat]}>
                 <View style={styles.endMarker}>
                   <Ionicons name="location" size={28} color={C.routeBlue} />
                 </View>
@@ -495,14 +498,7 @@ export default function TripMapScreen() {
               {wpList.map((wp) => (
                 <Marker
                   key={wp.id}
-                  coordinate={{ latitude: wp.lat, longitude: wp.lon }}
-                  title={
-                    wp.type === 1
-                      ? "Hazard"
-                      : wp.type === 2
-                        ? "Viewpoint"
-                        : "Photo"
-                  }
+                  lngLat={[wp.lon, wp.lat]}
                   onPress={() => {
                     if (wp.type === 3 && wp.imageUrl) {
                       setSelectedPhoto(wp.imageUrl);
@@ -536,7 +532,7 @@ export default function TripMapScreen() {
                   </View>
                 </Marker>
               ))}
-            </MapView>
+            </Map>
 
             {!mapExpanded && (
               <View style={styles.mapOverlay}>

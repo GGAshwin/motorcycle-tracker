@@ -14,7 +14,14 @@ import {
   Text,
   View,
 } from "react-native";
-import MapView, { Marker, Polyline } from "react-native-maps";
+import {
+  Camera,
+  GeoJSONSource,
+  Layer,
+  Map,
+  Marker,
+  type CameraRef,
+} from "@maplibre/maplibre-react-native";
 import { captureRef } from "react-native-view-shot";
 
 const { height: SCREEN_HEIGHT } = Dimensions.get("window");
@@ -36,12 +43,7 @@ const C = {
   textSecondary: "#8E8E93",
 } as const;
 
-// ── Map style ─────────────────────────────────────────────────────────────────
-
-const MAP_STYLE = [
-  { featureType: "poi", stylers: [{ visibility: "off" }] },
-  { featureType: "transit", stylers: [{ visibility: "off" }] },
-];
+const OSM_STYLE = "https://tiles.openfreemap.org/styles/liberty";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -137,7 +139,7 @@ function StatCell({
 export default function CloudTripMapScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const navigation = useNavigation();
-  const mapRef = useRef<MapView>(null);
+  const cameraRef = useRef<CameraRef>(null);
 
   const [trip, setTrip] = useState<any>(null);
   const [points, setPoints] = useState<any[]>([]);
@@ -224,20 +226,26 @@ export default function CloudTripMapScreen() {
   // ── Fit map to route after points load ─────────────────────────────────────
 
   useEffect(() => {
-    if (points.length < 2 || !mapRef.current) return;
+    if (points.length < 2 || !cameraRef.current) return;
+    const lngs = points.map((p) => p.lon);
+    const lats = points.map((p) => p.lat);
     setTimeout(() => {
-      mapRef.current?.fitToCoordinates(
-        points.map((p) => ({ latitude: p.lat, longitude: p.lon })),
-        {
-          edgePadding: { top: 40, right: 40, bottom: 40, left: 40 },
-          animated: true,
-        },
+      cameraRef.current?.fitBounds(
+        [Math.min(...lngs), Math.min(...lats), Math.max(...lngs), Math.max(...lats)],
+        { padding: { top: 40, right: 40, bottom: 40, left: 40 }, duration: 300 },
       );
     }, 100);
   }, [points, mapExpanded]);
 
-  const routeCoords = useMemo(
-    () => points.map((p) => ({ latitude: p.lat, longitude: p.lon })),
+  const routeGeoJSON = useMemo<GeoJSON.Feature>(
+    () => ({
+      type: "Feature",
+      geometry: {
+        type: "LineString",
+        coordinates: points.map((p) => [p.lon, p.lat]),
+      },
+      properties: {},
+    }),
     [points],
   );
 
@@ -322,42 +330,38 @@ export default function CloudTripMapScreen() {
             onPress={() => !mapExpanded && setMapExpanded(true)}
             disabled={mapExpanded}
           >
-            <MapView
-              ref={mapRef}
+            <Map
+              ref={undefined}
               style={StyleSheet.absoluteFillObject}
-              customMapStyle={MAP_STYLE}
-              showsUserLocation={false}
-              showsCompass
-              scrollEnabled={mapExpanded}
-              zoomEnabled={mapExpanded}
-              initialRegion={{
-                latitude: first.lat,
-                longitude: first.lon,
-                latitudeDelta: 0.05,
-                longitudeDelta: 0.05,
-              }}
+              mapStyle={OSM_STYLE}
+              dragPan={mapExpanded}
+              touchZoom={mapExpanded}
             >
-              <Polyline
-                coordinates={routeCoords}
-                strokeColor={C.routeBlue}
-                strokeWidth={4}
+              <Camera
+                ref={cameraRef}
+                initialViewState={{
+                  center: [first.lon, first.lat],
+                  zoom: 12,
+                }}
               />
 
+              <GeoJSONSource id="route" data={routeGeoJSON}>
+                <Layer
+                  id="route-line"
+                  type="line"
+                  paint={{ "line-color": C.routeBlue, "line-width": 4 }}
+                />
+              </GeoJSONSource>
+
               {/* Start Marker */}
-              <Marker
-                coordinate={{ latitude: first.lat, longitude: first.lon }}
-                title="Start"
-              >
+              <Marker lngLat={[first.lon, first.lat]}>
                 <View style={styles.startMarker}>
                   <View style={styles.startMarkerInner} />
                 </View>
               </Marker>
 
               {/* End Marker */}
-              <Marker
-                coordinate={{ latitude: last.lat, longitude: last.lon }}
-                title="End"
-              >
+              <Marker lngLat={[last.lon, last.lat]}>
                 <View style={styles.endMarker}>
                   <Ionicons name="location" size={28} color={C.routeBlue} />
                 </View>
@@ -367,14 +371,7 @@ export default function CloudTripMapScreen() {
               {wpList.map((wp) => (
                 <Marker
                   key={wp.id}
-                  coordinate={{ latitude: wp.lat, longitude: wp.lon }}
-                  title={
-                    wp.type === 1
-                      ? "Hazard"
-                      : wp.type === 2
-                        ? "Viewpoint"
-                        : "Photo"
-                  }
+                  lngLat={[wp.lon, wp.lat]}
                   onPress={() => {
                     if (wp.type === 3 && wp.image_url) {
                       setSelectedPhoto(wp.image_url);
@@ -408,7 +405,7 @@ export default function CloudTripMapScreen() {
                   </View>
                 </Marker>
               ))}
-            </MapView>
+            </Map>
 
             {!mapExpanded && (
               <View style={styles.mapOverlay}>
