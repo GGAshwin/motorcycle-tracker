@@ -28,7 +28,7 @@ import * as Location from "expo-location";
 import * as TaskManager from "expo-task-manager";
 
 import { getDb, getRawDb, initDatabase } from "../db/client";
-import { telemetryPoints, trips } from "../db/schema";
+import { telemetryPoints, trips, waypoints } from "../db/schema";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -69,6 +69,8 @@ export interface LiveRideState {
   distance: number;
   /** Whether a trip is actively being recorded. */
   isRecording: boolean;
+  /** Whether the active trip is currently paused. */
+  isPaused: boolean;
   currentTripId: number | null;
 }
 
@@ -79,6 +81,7 @@ let currentTripId: number | null = null;
 let tripDistMetres = 0;
 let lastCoord: { lat: number; lon: number } | null = null;
 let lastFlushTime = 0;
+let needsResumeWaypoint = false;
 
 let batchFlushTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -86,6 +89,7 @@ let liveState: LiveRideState = {
   speed: 0,
   distance: 0,
   isRecording: false,
+  isPaused: false,
   currentTripId: null,
 };
 
@@ -178,6 +182,7 @@ TaskManager.defineTask(
       return;
     }
     if (!data?.locations?.length || currentTripId === null) return;
+    if (liveState.isPaused) return; // Drop all coordinates while paused
 
     // Ensure DB is ready for background writes
     try {
@@ -206,6 +211,23 @@ TaskManager.defineTask(
         );
       }
       lastCoord = { lat, lon };
+
+      if (needsResumeWaypoint) {
+        needsResumeWaypoint = false;
+        try {
+          // Type 5 = Resume/Start
+          await getDb().insert(waypoints).values({
+            tripId: currentTripId,
+            lat,
+            lon,
+            type: 5,
+            timestamp: loc.timestamp,
+            isSynced: false
+          });
+        } catch (e) {
+          console.error("Failed to insert resume waypoint", e);
+        }
+      }
 
       pendingPoints.push({
         tripId: currentTripId,
@@ -322,5 +344,36 @@ export async function stopTrip(): Promise<void> {
   tripDistMetres = 0;
   lastCoord = null;
 
-  emit({ isRecording: false, currentTripId: null, speed: 0, distance: 0 });
+  emit({ isRecording: false, isPaused: false, currentTripId: null, speed: 0, distance: 0 });
+}
+
+export async function pauseTrip(): Promise<void> {
+  if (currentTripId === null || liveState.isPaused) return;
+  
+  if (lastCoord) {
+    try {
+      // Type 4 = Pause/Stop
+      await getDb().insert(waypoints).values({
+        tripId: currentTripId,
+        lat: lastCoord.lat,
+        lon: lastCoord.lon,
+        type: 4,
+        timestamp: Date.now(),
+        isSynced: false
+      });
+    } catch (e) {
+      console.error("Failed to insert pause waypoint", e);
+    }
+  }
+
+  // Nullifying lastCoord ensures no huge distance gap is added when resumed
+  lastCoord = null;
+  emit({ isPaused: true, speed: 0 });
+}
+
+export async function resumeTrip(): Promise<void> {
+  if (currentTripId === null || !liveState.isPaused) return;
+  
+  needsResumeWaypoint = true;
+  emit({ isPaused: false });
 }

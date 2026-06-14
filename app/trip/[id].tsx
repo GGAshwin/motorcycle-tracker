@@ -369,17 +369,37 @@ export default function TripMapScreen() {
     }, 100);
   }, [points, mapExpanded]);
 
-  const routeGeoJSON = useMemo<GeoJSON.Feature>(
-    () => ({
+  const routeGeoJSON = useMemo<GeoJSON.Feature>(() => {
+    const segments: number[][][] = [];
+    let currentSegment: number[][] = [];
+    
+    const pauseWaypoints = wpList.filter(wp => wp.type === 4).sort((a, b) => a.timestamp - b.timestamp);
+    let pauseIdx = 0;
+
+    for (let i = 0; i < points.length; i++) {
+      const p = points[i];
+      if (pauseIdx < pauseWaypoints.length && p.timestamp > pauseWaypoints[pauseIdx].timestamp) {
+        if (currentSegment.length > 0) {
+          segments.push(currentSegment);
+          currentSegment = [];
+        }
+        while (pauseIdx < pauseWaypoints.length && p.timestamp > pauseWaypoints[pauseIdx].timestamp) {
+          pauseIdx++;
+        }
+      }
+      currentSegment.push([p.lon, p.lat]);
+    }
+    if (currentSegment.length > 0) segments.push(currentSegment);
+
+    return {
       type: "Feature",
       geometry: {
-        type: "LineString",
-        coordinates: points.map((p) => [p.lon, p.lat]),
+        type: "MultiLineString",
+        coordinates: segments,
       },
       properties: {},
-    }),
-    [points],
-  );
+    };
+  }, [points, wpList]);
 
   const maxSpeed = useMemo(
     () => points.reduce((max, p) => Math.max(max, p.speed ?? 0), 0),
@@ -514,7 +534,11 @@ export default function TripMapScreen() {
                             ? "#E53935"
                             : wp.type === 2
                               ? "#1E88E5"
-                              : C.iconAccent,
+                              : wp.type === 4
+                                ? "#FFB020"
+                                : wp.type === 5
+                                  ? "#4CAF50"
+                                  : C.iconAccent,
                       },
                     ]}
                   >
@@ -524,7 +548,11 @@ export default function TripMapScreen() {
                           ? "warning"
                           : wp.type === 2
                             ? "eye"
-                            : "camera"
+                            : wp.type === 4
+                              ? "pause"
+                              : wp.type === 5
+                                ? "play"
+                                : "camera"
                       }
                       size={16}
                       color="#FFF"

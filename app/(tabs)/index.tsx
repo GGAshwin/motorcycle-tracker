@@ -100,7 +100,7 @@ function SpeedGauge({
 // ── Main Screen ───────────────────────────────────────────────────────────────
 
 export default function RideScreen() {
-  const { speedKmh, distance, isRecording, startRide, stopRide } =
+  const { speedKmh, distance, isRecording, isPaused, startRide, stopRide, pauseRide, resumeRide } =
     useCurrentRide();
 
   const [loading, setLoading] = useState(false);
@@ -135,7 +135,7 @@ export default function RideScreen() {
   );
 
   useEffect(() => {
-    if (isRecording) {
+    if (isRecording && !isPaused) {
       activateKeepAwakeAsync();
     } else {
       deactivateKeepAwake();
@@ -143,7 +143,7 @@ export default function RideScreen() {
     return () => {
       deactivateKeepAwake();
     };
-  }, [isRecording]);
+  }, [isRecording, isPaused]);
 
   const pulse = useRef(new Animated.Value(1)).current;
   const startPulse = useCallback(() => {
@@ -210,9 +210,9 @@ export default function RideScreen() {
         </View>
 
         {isRecording && (
-          <View style={styles.recBadge}>
-            <Animated.View style={[styles.recDot, { opacity: pulse }]} />
-            <Text style={styles.recText}>REC</Text>
+          <View style={[styles.recBadge, isPaused && { backgroundColor: "rgba(255, 165, 0, 0.12)" }]}>
+            <Animated.View style={[styles.recDot, { opacity: pulse }, isPaused && { backgroundColor: "orange" }]} />
+            <Text style={[styles.recText, isPaused && { color: "orange" }]}>{isPaused ? "PAUSED" : "REC"}</Text>
           </View>
         )}
       </View>
@@ -259,37 +259,76 @@ export default function RideScreen() {
               </Text>
             </View>
             <View style={styles.currentRideLive}>
-              <Animated.View style={[styles.liveDot, { opacity: pulse }]} />
-              <Text style={styles.liveText}>LIVE</Text>
+              {!isPaused && <Animated.View style={[styles.liveDot, { opacity: pulse }]} />}
+              <Text style={styles.liveText}>{isPaused ? "PAUSED" : "LIVE"}</Text>
             </View>
           </View>
         )}
 
-        <Pressable
-          style={({ pressed }) => [
-            styles.mainBtn,
-            isRecording ? styles.mainBtnStop : styles.mainBtnStart,
-            loading && styles.mainBtnDisabled,
-            pressed && !loading && styles.btnPressed,
-          ]}
-          onPress={handleToggle}
-          disabled={loading}
-        >
-          {loading ? (
-            <ActivityIndicator color="#FFF" size="small" />
-          ) : (
-            <>
-              <Text style={styles.mainBtnText}>
-                {isRecording ? "End Ride" : "Start Ride"}
-              </Text>
-              <Ionicons
-                name={isRecording ? "stop-circle" : "play-circle"}
-                size={24}
-                color="#FFF"
-              />
-            </>
-          )}
-        </Pressable>
+        {isRecording ? (
+          <View style={{ flexDirection: 'row', gap: 12 }}>
+            <Pressable
+              style={({ pressed }) => [
+                styles.mainBtn,
+                isPaused ? styles.mainBtnStart : styles.mainBtnPause,
+                { flex: 1 },
+                loading && styles.mainBtnDisabled,
+                pressed && !loading && styles.btnPressed,
+              ]}
+              onPress={async () => {
+                 if (isPaused) {
+                   await resumeRide();
+                   startPulse();
+                 } else {
+                   pulse.stopAnimation();
+                   pulse.setValue(1);
+                   await pauseRide();
+                 }
+              }}
+              disabled={loading}
+            >
+              <Text style={styles.mainBtnText}>{isPaused ? "Resume" : "Pause"}</Text>
+            </Pressable>
+
+            <Pressable
+              style={({ pressed }) => [
+                styles.mainBtn,
+                styles.mainBtnStop,
+                { flex: 1 },
+                loading && styles.mainBtnDisabled,
+                pressed && !loading && styles.btnPressed,
+              ]}
+              onPress={handleToggle}
+              disabled={loading}
+            >
+              <Text style={styles.mainBtnText}>End</Text>
+            </Pressable>
+          </View>
+        ) : (
+          <Pressable
+            style={({ pressed }) => [
+              styles.mainBtn,
+              styles.mainBtnStart,
+              loading && styles.mainBtnDisabled,
+              pressed && !loading && styles.btnPressed,
+            ]}
+            onPress={handleToggle}
+            disabled={loading}
+          >
+            {loading ? (
+              <ActivityIndicator color="#FFF" size="small" />
+            ) : (
+              <>
+                <Text style={styles.mainBtnText}>Start Ride</Text>
+                <Ionicons
+                  name="arrow-forward"
+                  size={20}
+                  color={C.textPrimary}
+                />
+              </>
+            )}
+          </Pressable>
+        )}
       </View>
     </SafeAreaView>
   );
@@ -489,10 +528,13 @@ const styles = StyleSheet.create({
     borderRadius: 16,
   },
   mainBtnStart: {
-    backgroundColor: C.orange,
+    backgroundColor: C.green,
   },
   mainBtnStop: {
     backgroundColor: C.red,
+  },
+  mainBtnPause: {
+    backgroundColor: "#FFB020",
   },
   mainBtnDisabled: {
     opacity: 0.5,
