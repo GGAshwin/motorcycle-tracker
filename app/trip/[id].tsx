@@ -32,6 +32,15 @@ import { telemetryPoints, trips, waypoints } from "@/db/schema";
 import { supabase } from "@/lib/supabase";
 import { pushLocalDataToCloud } from "@/lib/syncService";
 import * as SecureStore from "expo-secure-store";
+import { StatCell } from "@/components/StatCell";
+import {
+  formatDistKm,
+  formatDateFull,
+  formatDateShort,
+  formatDurationMins,
+  formatSpeedKmph,
+  formatTime,
+} from "@/lib/formatters";
 
 const { height: SCREEN_HEIGHT } = Dimensions.get("window");
 
@@ -53,103 +62,6 @@ const C = {
 } as const;
 
 const OSM_STYLE = "https://tiles.openfreemap.org/styles/liberty";
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-function formatDateFull(ms: number): string {
-  return new Date(ms).toLocaleDateString(undefined, {
-    day: "numeric",
-    month: "long",
-    year: "numeric",
-  });
-}
-
-function formatDateShort(ms: number): string {
-  return new Date(ms).toLocaleDateString(undefined, {
-    day: "2-digit",
-    month: "short",
-    year: "numeric",
-  });
-}
-
-function formatTime(ms: number): string {
-  return new Date(ms)
-    .toLocaleTimeString(undefined, {
-      hour: "numeric",
-      minute: "2-digit",
-      hour12: true,
-    })
-    .toUpperCase();
-}
-
-function formatDurationMins(startMs: number, endMs: number | null): number {
-  if (!endMs) return 0;
-  return Math.floor((endMs - startMs) / 60000);
-}
-
-function formatDistKm(metres: number): string {
-  return (metres / 1000).toFixed(1);
-}
-
-function formatSpeedKmph(ms: number): string {
-  return (ms * 3.6).toFixed(1);
-}
-
-// ── Stat Cell Component ───────────────────────────────────────────────────────
-
-function StatCell({
-  icon,
-  label,
-  value,
-  unit,
-  labelOnTop = true,
-}: {
-  icon?: keyof typeof Ionicons.glyphMap;
-  label: string;
-  value: string;
-  unit: string;
-  labelOnTop?: boolean;
-}) {
-  const content = labelOnTop ? (
-    <>
-      <View style={styles.statLabelRow}>
-        {icon && (
-          <Ionicons
-            name={icon}
-            size={16}
-            color={C.iconAccent}
-            style={styles.statIcon}
-          />
-        )}
-        <Text style={styles.statLabel}>{label}</Text>
-      </View>
-      <View style={styles.statValueRow}>
-        <Text style={styles.statValueLarge}>{value}</Text>
-        <Text style={styles.statUnit}>{unit}</Text>
-      </View>
-    </>
-  ) : (
-    <>
-      <View style={styles.statValueRow}>
-        <Text style={styles.statValueLarge}>{value}</Text>
-        <Text style={styles.statUnit}>{unit}</Text>
-      </View>
-      <View style={styles.statLabelRow}>
-        {icon && (
-          <Ionicons
-            name={icon}
-            size={16}
-            color={C.iconAccent}
-            style={styles.statIcon}
-          />
-        )}
-        <Text style={styles.statLabel}>{label}</Text>
-      </View>
-    </>
-  );
-
-  return <View style={styles.statCell}>{content}</View>;
-}
 
 // ── Screen ────────────────────────────────────────────────────────────────────
 
@@ -898,41 +810,6 @@ const styles = StyleSheet.create({
   statsRow: {
     flexDirection: "row",
     paddingVertical: 16,
-  },
-  statCell: {
-    flex: 1,
-    alignItems: "center",
-    justifyContent: "center",
-    paddingHorizontal: 8,
-  },
-  statLabelRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 4,
-  },
-  statIcon: {
-    marginRight: 2,
-  },
-  statLabel: {
-    fontSize: 11,
-    color: C.textMuted,
-    fontWeight: "500",
-  },
-  statValueRow: {
-    flexDirection: "row",
-    alignItems: "baseline",
-    gap: 3,
-    marginTop: 4,
-  },
-  statValueLarge: {
-    fontSize: 22,
-    fontWeight: "700",
-    color: C.textDark,
-  },
-  statUnit: {
-    fontSize: 12,
-    fontWeight: "600",
-    color: C.textDark,
   },
   verticalDivider: {
     width: 1,
