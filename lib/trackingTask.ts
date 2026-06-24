@@ -69,6 +69,8 @@ export interface LiveRideState {
   distance: number;
   /** Whether a trip is actively being recorded. */
   isRecording: boolean;
+  /** Whether recording is temporarily paused. */
+  isPaused: boolean;
   currentTripId: number | null;
 }
 
@@ -86,6 +88,7 @@ let liveState: LiveRideState = {
   speed: 0,
   distance: 0,
   isRecording: false,
+  isPaused: false,
   currentTripId: null,
 };
 
@@ -294,7 +297,7 @@ export async function startTrip(): Promise<number> {
     },
   });
 
-  emit({ isRecording: true, currentTripId: newTripId });
+  emit({ isRecording: true, isPaused: false, currentTripId: newTripId });
   return newTripId;
 }
 
@@ -322,5 +325,53 @@ export async function stopTrip(): Promise<void> {
   tripDistMetres = 0;
   lastCoord = null;
 
-  emit({ isRecording: false, currentTripId: null, speed: 0, distance: 0 });
+  emit({ isRecording: false, isPaused: false, currentTripId: null, speed: 0, distance: 0 });
+}
+
+/**
+ * Pauses GPS recording without ending the trip.
+ * lastCoord is cleared so the next point after resume doesn't create a
+ * phantom distance segment across the gap.
+ */
+export async function pauseTrip(): Promise<void> {
+  if (currentTripId === null || liveState.isPaused) return;
+
+  await Location.stopLocationUpdatesAsync(TRACKING_TASK_NAME);
+
+  if (batchFlushTimer) {
+    clearInterval(batchFlushTimer);
+    batchFlushTimer = null;
+  }
+
+  await flushBatch();
+
+  // Clear lastCoord so resumed tracking starts fresh from the next fix.
+  lastCoord = null;
+
+  emit({ isPaused: true, speed: 0 });
+}
+
+/**
+ * Resumes a paused trip. GPS updates and the flush timer restart on the
+ * same trip record — distance accumulates from the next fix onwards.
+ */
+export async function resumeTrip(): Promise<void> {
+  if (currentTripId === null || !liveState.isPaused) return;
+
+  lastFlushTime = Date.now();
+  batchFlushTimer = setInterval(flushBatch, FLUSH_INTERVAL_MS);
+
+  await Location.startLocationUpdatesAsync(TRACKING_TASK_NAME, {
+    accuracy: Location.Accuracy.BestForNavigation,
+    timeInterval: 1000,
+    distanceInterval: 0,
+    showsBackgroundLocationIndicator: true,
+    foregroundService: {
+      notificationTitle: "MotoTrack – Recording",
+      notificationBody: "Tap to return to the app.",
+      notificationColor: "#FF6B00",
+    },
+  });
+
+  emit({ isPaused: false });
 }

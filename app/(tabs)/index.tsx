@@ -100,7 +100,7 @@ function SpeedGauge({
 // ── Main Screen ───────────────────────────────────────────────────────────────
 
 export default function RideScreen() {
-  const { speedKmh, distance, isRecording, startRide, stopRide } =
+  const { speedKmh, distance, isRecording, isPaused, startRide, stopRide, pauseRide, resumeRide } =
     useCurrentRide();
 
   const [loading, setLoading] = useState(false);
@@ -196,6 +196,25 @@ export default function RideScreen() {
     }
   }, [isRecording, startRide, stopRide, pulse, startPulse]);
 
+  const handlePauseResume = useCallback(async () => {
+    setRideError(null);
+    setLoading(true);
+    try {
+      if (isPaused) {
+        await resumeRide();
+        startPulse();
+      } else {
+        pulse.stopAnimation();
+        pulse.setValue(1);
+        await pauseRide();
+      }
+    } catch (err) {
+      setRideError(err instanceof Error ? err.message : "Something went wrong");
+    } finally {
+      setLoading(false);
+    }
+  }, [isPaused, pauseRide, resumeRide, pulse, startPulse]);
+
   const totalDist = odometer.totalDist + (isRecording ? distance : 0);
 
   return (
@@ -210,9 +229,11 @@ export default function RideScreen() {
         </View>
 
         {isRecording && (
-          <View style={styles.recBadge}>
-            <Animated.View style={[styles.recDot, { opacity: pulse }]} />
-            <Text style={styles.recText}>REC</Text>
+          <View style={[styles.recBadge, isPaused && styles.recBadgePaused]}>
+            <Animated.View style={[styles.recDot, isPaused && styles.recDotPaused, !isPaused && { opacity: pulse }]} />
+            <Text style={[styles.recText, isPaused && styles.recTextPaused]}>
+              {isPaused ? "PAUSED" : "REC"}
+            </Text>
           </View>
         )}
       </View>
@@ -259,37 +280,77 @@ export default function RideScreen() {
               </Text>
             </View>
             <View style={styles.currentRideLive}>
-              <Animated.View style={[styles.liveDot, { opacity: pulse }]} />
-              <Text style={styles.liveText}>LIVE</Text>
+              <Animated.View style={[styles.liveDot, isPaused && styles.liveDotPaused, !isPaused && { opacity: pulse }]} />
+              <Text style={[styles.liveText, isPaused && styles.liveTextPaused]}>
+                {isPaused ? "PAUSED" : "LIVE"}
+              </Text>
             </View>
           </View>
         )}
 
-        <Pressable
-          style={({ pressed }) => [
-            styles.mainBtn,
-            isRecording ? styles.mainBtnStop : styles.mainBtnStart,
-            loading && styles.mainBtnDisabled,
-            pressed && !loading && styles.btnPressed,
-          ]}
-          onPress={handleToggle}
-          disabled={loading}
-        >
-          {loading ? (
-            <ActivityIndicator color="#FFF" size="small" />
-          ) : (
-            <>
-              <Text style={styles.mainBtnText}>
-                {isRecording ? "End Ride" : "Start Ride"}
-              </Text>
-              <Ionicons
-                name={isRecording ? "stop-circle" : "play-circle"}
-                size={24}
-                color="#FFF"
-              />
-            </>
-          )}
-        </Pressable>
+        {isRecording ? (
+          <View style={styles.activeButtons}>
+            <Pressable
+              style={({ pressed }) => [
+                styles.mainBtn,
+                styles.mainBtnStop,
+                loading && styles.mainBtnDisabled,
+                pressed && !loading && styles.btnPressed,
+              ]}
+              onPress={handleToggle}
+              disabled={loading}
+            >
+              {loading ? (
+                <ActivityIndicator color="#FFF" size="small" />
+              ) : (
+                <>
+                  <Text style={styles.mainBtnText}>End Ride</Text>
+                  <Ionicons name="stop-circle" size={24} color="#FFF" />
+                </>
+              )}
+            </Pressable>
+
+            <Pressable
+              style={({ pressed }) => [
+                styles.mainBtn,
+                styles.mainBtnPause,
+                loading && styles.mainBtnDisabled,
+                pressed && !loading && styles.btnPressed,
+              ]}
+              onPress={handlePauseResume}
+              disabled={loading}
+            >
+              {loading ? (
+                <ActivityIndicator color="#FFF" size="small" />
+              ) : (
+                <>
+                  <Text style={styles.mainBtnText}>{isPaused ? "Resume" : "Pause"}</Text>
+                  <Ionicons name={isPaused ? "play-circle" : "pause-circle"} size={24} color="#FFF" />
+                </>
+              )}
+            </Pressable>
+          </View>
+        ) : (
+          <Pressable
+            style={({ pressed }) => [
+              styles.mainBtn,
+              styles.mainBtnStart,
+              loading && styles.mainBtnDisabled,
+              pressed && !loading && styles.btnPressed,
+            ]}
+            onPress={handleToggle}
+            disabled={loading}
+          >
+            {loading ? (
+              <ActivityIndicator color="#FFF" size="small" />
+            ) : (
+              <>
+                <Text style={styles.mainBtnText}>Start Ride</Text>
+                <Ionicons name="play-circle" size={24} color="#FFF" />
+              </>
+            )}
+          </Pressable>
+        )}
       </View>
     </SafeAreaView>
   );
@@ -338,17 +399,26 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
     borderRadius: 20,
   },
+  recBadgePaused: {
+    backgroundColor: "rgba(255,159,10,0.12)",
+  },
   recDot: {
     width: 8,
     height: 8,
     borderRadius: 4,
     backgroundColor: C.red,
   },
+  recDotPaused: {
+    backgroundColor: "#FF9F0A",
+  },
   recText: {
     fontSize: 12,
     fontWeight: "700",
     color: C.red,
     letterSpacing: 1,
+  },
+  recTextPaused: {
+    color: "#FF9F0A",
   },
 
   gaugeWrapper: {
@@ -461,11 +531,17 @@ const styles = StyleSheet.create({
     borderRadius: 3,
     backgroundColor: C.green,
   },
+  liveDotPaused: {
+    backgroundColor: "#FF9F0A",
+  },
   liveText: {
     fontSize: 12,
     fontWeight: "600",
     color: C.green,
     letterSpacing: 0.5,
+  },
+  liveTextPaused: {
+    color: "#FF9F0A",
   },
 
   bottomSection: {
@@ -493,6 +569,15 @@ const styles = StyleSheet.create({
   },
   mainBtnStop: {
     backgroundColor: C.red,
+    flex: 1,
+  },
+  mainBtnPause: {
+    backgroundColor: "#636366",
+    flex: 1,
+  },
+  activeButtons: {
+    flexDirection: "row",
+    gap: 10,
   },
   mainBtnDisabled: {
     opacity: 0.5,

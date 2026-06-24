@@ -13,7 +13,6 @@ import { desc, eq } from 'drizzle-orm';
 
 import { getDb } from '@/db/client';
 import { trips, type Trip } from '@/db/schema';
-import { seedTestRide } from '@/lib/seedTestData';
 
 const C = {
   bg:            '#0D0D0F',
@@ -80,7 +79,6 @@ function TripRow({ trip, onPress, onLongPress }: { trip: Trip; onPress: () => vo
 export default function HistoryScreen() {
   const router = useRouter();
   const [rideHistory, setRideHistory] = useState<Trip[]>([]);
-  const [seeding, setSeeding] = useState(false);
   const [deleteTargetId, setDeleteTargetId] = useState<number | null>(null);
 
   const load = useCallback(async () => {
@@ -98,16 +96,6 @@ export default function HistoryScreen() {
   // Refresh every time the tab becomes active.
   useFocusEffect(useCallback(() => { load(); }, [load]));
 
-  const handleSeed = useCallback(async () => {
-    setSeeding(true);
-    try {
-      await seedTestRide();
-      await load();
-    } finally {
-      setSeeding(false);
-    }
-  }, [load]);
-
   const confirmDelete = useCallback(async () => {
     if (deleteTargetId === null) return;
     await getDb().delete(trips).where(eq(trips.id, deleteTargetId));
@@ -118,16 +106,7 @@ export default function HistoryScreen() {
   return (
     <SafeAreaView style={styles.safe}>
       <View style={styles.header}>
-        <View style={styles.headerRow}> 
           <Text style={styles.title}>Ride History</Text>
-          {/* <Pressable
-            style={({ pressed }) => [styles.seedBtn, pressed && { opacity: 0.6 }]}
-            onPress={handleSeed}
-            disabled={seeding}
-          >
-            <Text style={styles.seedBtnText}>{seeding ? '…' : '+ Test ride'}</Text>
-          </Pressable> */}
-        </View>
         <Text style={styles.subtitle}>
           {rideHistory.length === 0 ? 'No rides yet' : `${rideHistory.length} ride${rideHistory.length !== 1 ? 's' : ''}`}
         </Text>
@@ -202,24 +181,6 @@ const styles = StyleSheet.create({
     paddingTop: 16,
     paddingBottom: 16,
     gap: 2,
-  },
-  headerRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  seedBtn: {
-    backgroundColor: C.surface,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: C.border,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-  },
-  seedBtnText: {
-    color: C.textSecondary,
-    fontSize: 12,
-    fontWeight: '500',
   },
   title: {
     color: C.textPrimary,
