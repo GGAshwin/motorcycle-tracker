@@ -82,11 +82,22 @@ export default function CloudTripMapScreen() {
           .single();
         if (routeErr || cancelled) return;
 
-        const { data: ptData } = await supabase
-          .from("telemetry_points")
-          .select("*")
-          .eq("trip_id", routeData.id)
-          .order("timestamp", { ascending: true });
+        const PAGE = 1000;
+        let allPoints: any[] = [];
+        let from = 0;
+        while (true) {
+          const { data: page, error } = await supabase
+            .from("telemetry_points")
+            .select("*")
+            .eq("trip_id", routeData.id)
+            .order("timestamp", { ascending: true })
+            .range(from, from + PAGE - 1);
+          if (error || !page || page.length === 0) break;
+          allPoints = allPoints.concat(page);
+          if (page.length < PAGE) break;
+          from += PAGE;
+        }
+        const ptData = allPoints;
 
         const { data: wpData } = await supabase
           .from("waypoints")
