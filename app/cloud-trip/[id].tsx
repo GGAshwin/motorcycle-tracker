@@ -5,7 +5,6 @@ import { useLocalSearchParams, useNavigation } from "expo-router";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
-  Dimensions,
   Image,
   Pressable,
   ScrollView,
@@ -24,115 +23,16 @@ import {
 } from "@maplibre/maplibre-react-native";
 import { captureRef } from "react-native-view-shot";
 
-const { height: SCREEN_HEIGHT } = Dimensions.get("window");
-
-// ── Colour palette ────────────────────────────────────────────────────────────
-
-const C = {
-  // New design colors
-  headerBg: "#0F4D4A",
-  cardBg: "#FFFFFF",
-  textDark: "#111111",
-  textMuted: "#666666",
-  iconAccent: "#C87030",
-  routeBlue: "#2196F3",
-  divider: "#E5E5E5",
-  // Legacy (kept for loading/empty states)
-  bg: "#0D0D0F",
-  orange: "#FF6B00",
-  textSecondary: "#8E8E93",
-} as const;
-
-const OSM_STYLE = "https://tiles.openfreemap.org/styles/liberty";
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-function formatDateFull(ms: number): string {
-  return new Date(ms).toLocaleDateString(undefined, {
-    day: "numeric",
-    month: "long",
-    year: "numeric",
-  });
-}
-
-function formatTime(ms: number): string {
-  return new Date(ms)
-    .toLocaleTimeString(undefined, {
-      hour: "numeric",
-      minute: "2-digit",
-      hour12: true,
-    })
-    .toUpperCase();
-}
-
-function formatDurationMins(startMs: number, endMs: number | null): number {
-  if (!endMs) return 0;
-  return Math.floor((endMs - startMs) / 60000);
-}
-
-function formatDistKm(metres: number): string {
-  return (metres / 1000).toFixed(1);
-}
-
-function formatSpeedKmph(ms: number): string {
-  return (ms * 3.6).toFixed(1);
-}
-
-// ── Stat Cell Component ───────────────────────────────────────────────────────
-
-function StatCell({
-  icon,
-  label,
-  value,
-  unit,
-  labelOnTop = true,
-}: {
-  icon?: keyof typeof Ionicons.glyphMap;
-  label: string;
-  value: string;
-  unit: string;
-  labelOnTop?: boolean;
-}) {
-  const content = labelOnTop ? (
-    <>
-      <View style={styles.statLabelRow}>
-        {icon && (
-          <Ionicons
-            name={icon}
-            size={16}
-            color={C.iconAccent}
-            style={styles.statIcon}
-          />
-        )}
-        <Text style={styles.statLabel}>{label}</Text>
-      </View>
-      <View style={styles.statValueRow}>
-        <Text style={styles.statValueLarge}>{value}</Text>
-        <Text style={styles.statUnit}>{unit}</Text>
-      </View>
-    </>
-  ) : (
-    <>
-      <View style={styles.statValueRow}>
-        <Text style={styles.statValueLarge}>{value}</Text>
-        <Text style={styles.statUnit}>{unit}</Text>
-      </View>
-      <View style={styles.statLabelRow}>
-        {icon && (
-          <Ionicons
-            name={icon}
-            size={16}
-            color={C.iconAccent}
-            style={styles.statIcon}
-          />
-        )}
-        <Text style={styles.statLabel}>{label}</Text>
-      </View>
-    </>
-  );
-
-  return <View style={styles.statCell}>{content}</View>;
-}
+import {
+  formatDateFull,
+  formatDistKm,
+  formatDurationMins,
+  formatSpeedKmph,
+  formatTime12h,
+} from "@/lib/formatters";
+import { StatCell } from "@/components/stat-cell";
+import { TRIP_COLORS as C, OSM_STYLE } from "@/constants/trip";
+import { tripScreenStyles as styles } from "@/styles/tripScreen";
 
 // ── Screen ────────────────────────────────────────────────────────────────────
 
@@ -152,21 +52,9 @@ export default function CloudTripMapScreen() {
   const handleShare = async () => {
     if (!trip || !shareableRef.current) return;
     try {
-      // Capture the shareable section as an image
-      const uri = await captureRef(shareableRef, {
-        format: "png",
-        quality: 1,
-      });
-
-      // Copy the captured image to a permanent location so it can be shared
-      const fileName = `community-ride-${trip.id}-${Date.now()}.png`;
-      const fileUri = `${FileSystem.documentDirectory}${fileName}`;
-
-      await FileSystem.copyAsync({
-        from: uri,
-        to: fileUri,
-      });
-
+      const uri = await captureRef(shareableRef, { format: "png", quality: 1 });
+      const fileUri = `${FileSystem.documentDirectory}community-ride-${trip.id}-${Date.now()}.png`;
+      await FileSystem.copyAsync({ from: uri, to: fileUri });
       await Share.share({
         url: fileUri,
         message: `Check out @${trip.username}'s epic ride! Distance: ${formatDistKm(trip.total_dist)} km`,
@@ -218,12 +106,10 @@ export default function CloudTripMapScreen() {
       }
     })();
 
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, [id, navigation]);
 
-  // ── Fit map to route after points load ─────────────────────────────────────
+  // ── Fit map to route ────────────────────────────────────────────────────────
 
   useEffect(() => {
     if (points.length < 2 || !cameraRef.current) return;
@@ -240,10 +126,7 @@ export default function CloudTripMapScreen() {
   const routeGeoJSON = useMemo<GeoJSON.Feature>(
     () => ({
       type: "Feature",
-      geometry: {
-        type: "LineString",
-        coordinates: points.map((p) => [p.lon, p.lat]),
-      },
+      geometry: { type: "LineString", coordinates: points.map((p) => [p.lon, p.lat]) },
       properties: {},
     }),
     [points],
@@ -260,12 +143,12 @@ export default function CloudTripMapScreen() {
     return moving.reduce((sum, p) => sum + (p.speed ?? 0), 0) / moving.length;
   }, [points]);
 
-  const durationMins = useMemo(() => {
-    if (!trip) return 0;
-    return formatDurationMins(trip.start_time, trip.end_time ?? null);
-  }, [trip]);
+  const durationMins = useMemo(
+    () => (trip ? formatDurationMins(trip.start_time, trip.end_time ?? null) : 0),
+    [trip],
+  );
 
-  // ── Loading ─────────────────────────────────────────────────────────────────
+  // ── Loading / Empty states ──────────────────────────────────────────────────
 
   if (loading) {
     return (
@@ -275,8 +158,6 @@ export default function CloudTripMapScreen() {
       </View>
     );
   }
-
-  // ── Empty state ─────────────────────────────────────────────────────────────
 
   if (points.length < 2) {
     return (
@@ -301,104 +182,57 @@ export default function CloudTripMapScreen() {
   return (
     <View style={styles.container}>
       <ScrollView style={styles.scrollView} bounces={false}>
-        {/* Shareable content wrapper */}
         <View ref={shareableRef} collapsable={false}>
-          {/* ── Header Bar ── */}
+          {/* Header */}
           <View style={styles.header}>
             <View style={styles.headerIcon}>
               <Ionicons name="bicycle" size={32} color="#FFF" />
               <Text style={styles.headerIconLabel}>RIDE</Text>
             </View>
             <View style={styles.headerText}>
-              <Text style={styles.headerTitle}>
-                {riderName}&apos;S EPIC RIDE
-              </Text>
+              <Text style={styles.headerTitle}>{riderName}&apos;S EPIC RIDE</Text>
               <Text style={styles.headerSubtitle}>
                 COMMUNITY RIDE -{" "}
                 {formatDateFull(
-                  trip?.created_at
-                    ? new Date(trip.created_at).getTime()
-                    : Date.now(),
+                  trip?.created_at ? new Date(trip.created_at).getTime() : Date.now(),
                 )}
               </Text>
             </View>
           </View>
 
-          {/* ── Map View ── */}
+          {/* Map */}
           <Pressable
             style={[styles.mapContainer, mapExpanded && styles.mapExpanded]}
             onPress={() => !mapExpanded && setMapExpanded(true)}
             disabled={mapExpanded}
           >
             <Map
-              ref={undefined}
               style={StyleSheet.absoluteFillObject}
               mapStyle={OSM_STYLE}
               dragPan={mapExpanded}
               touchZoom={mapExpanded}
             >
-              <Camera
-                ref={cameraRef}
-                initialViewState={{
-                  center: [first.lon, first.lat],
-                  zoom: 12,
-                }}
-              />
-
+              <Camera ref={cameraRef} initialViewState={{ center: [first.lon, first.lat], zoom: 12 }} />
               <GeoJSONSource id="route" data={routeGeoJSON}>
-                <Layer
-                  id="route-line"
-                  type="line"
-                  paint={{ "line-color": C.routeBlue, "line-width": 4 }}
-                />
+                <Layer id="route-line" type="line" paint={{ "line-color": C.routeBlue, "line-width": 4 }} />
               </GeoJSONSource>
-
-              {/* Start Marker */}
               <Marker lngLat={[first.lon, first.lat]}>
-                <View style={styles.startMarker}>
-                  <View style={styles.startMarkerInner} />
-                </View>
+                <View style={styles.startMarker}><View style={styles.startMarkerInner} /></View>
               </Marker>
-
-              {/* End Marker */}
               <Marker lngLat={[last.lon, last.lat]}>
                 <View style={styles.endMarker}>
                   <Ionicons name="location" size={28} color={C.routeBlue} />
                 </View>
               </Marker>
-
-              {/* Waypoints */}
               {wpList.map((wp) => (
-                <Marker
-                  key={wp.id}
-                  lngLat={[wp.lon, wp.lat]}
-                  onPress={() => {
-                    if (wp.type === 3 && wp.image_url) {
-                      setSelectedPhoto(wp.image_url);
-                    }
-                  }}
-                >
-                  <View
-                    style={[
-                      styles.waypointMarker,
-                      {
-                        backgroundColor:
-                          wp.type === 1
-                            ? "#E53935"
-                            : wp.type === 2
-                              ? "#1E88E5"
-                              : C.iconAccent,
-                      },
-                    ]}
-                  >
+                <Marker key={wp.id} lngLat={[wp.lon, wp.lat]} onPress={() => {
+                  if (wp.type === 3 && wp.image_url) setSelectedPhoto(wp.image_url);
+                }}>
+                  <View style={[styles.waypointMarker, {
+                    backgroundColor: wp.type === 1 ? "#E53935" : wp.type === 2 ? "#1E88E5" : C.iconAccent,
+                  }]}>
                     <Ionicons
-                      name={
-                        wp.type === 1
-                          ? "warning"
-                          : wp.type === 2
-                            ? "eye"
-                            : "camera"
-                      }
+                      name={wp.type === 1 ? "warning" : wp.type === 2 ? "eye" : "camera"}
                       size={16}
                       color="#FFF"
                     />
@@ -412,106 +246,62 @@ export default function CloudTripMapScreen() {
                 <Text style={styles.mapOverlayText}>Tap to expand</Text>
               </View>
             )}
-
             {mapExpanded && (
-              <Pressable
-                style={styles.collapseBtn}
-                onPress={() => setMapExpanded(false)}
-              >
+              <Pressable style={styles.collapseBtn} onPress={() => setMapExpanded(false)}>
                 <Ionicons name="contract-outline" size={20} color="#FFF" />
                 <Text style={styles.collapseBtnText}>Collapse</Text>
               </Pressable>
             )}
           </Pressable>
 
-          {/* ── Profile Section ── */}
+          {/* Profile */}
           <View style={styles.profileSection}>
             <View style={styles.avatar}>
               <Ionicons name="person-circle" size={48} color={C.headerBg} />
             </View>
-            <View style={styles.profileInfo}>
-              <Text style={styles.profileName}>
-                @{trip?.username || "rider"}
-              </Text>
-              <View style={styles.communityBadge}>
+            <View style={localStyles.profileInfo}>
+              <Text style={styles.profileName}>@{trip?.username || "rider"}</Text>
+              <View style={localStyles.communityBadge}>
                 <Ionicons name="globe-outline" size={14} color={C.headerBg} />
-                <Text style={styles.communityBadgeText}>Community Route</Text>
+                <Text style={localStyles.communityBadgeText}>Community Route</Text>
               </View>
             </View>
           </View>
 
           <View style={styles.divider} />
 
-          {/* ── Stats Grid ── */}
+          {/* Stats */}
           <View style={styles.statsCard}>
-            {/* Row 1 */}
             <View style={styles.statsRow}>
-              <StatCell
-                label="Distance"
-                value={formatDistKm(trip?.total_dist ?? 0)}
-                unit="KM"
-              />
+              <StatCell label="Distance" value={formatDistKm(trip?.total_dist ?? 0)} unit="KM" />
               <View style={styles.verticalDivider} />
-              <StatCell
-                icon="stopwatch-outline"
-                label="Moving Time"
-                value={String(durationMins)}
-                unit="MINS"
-              />
+              <StatCell icon="stopwatch-outline" label="Moving Time" value={String(durationMins)} unit="MINS" />
               <View style={styles.verticalDivider} />
-              <StatCell
-                icon="speedometer-outline"
-                label="Avg Speed"
-                value={formatSpeedKmph(avgSpeed)}
-                unit="KMPH"
-              />
+              <StatCell icon="speedometer-outline" label="Avg Speed" value={formatSpeedKmph(avgSpeed)} unit="KMPH" />
             </View>
-
             <View style={styles.divider} />
-
-            {/* Row 2 */}
             <View style={styles.statsRow}>
-              <StatCell
-                icon="flame-outline"
-                label="Max Speed"
-                value={formatSpeedKmph(maxSpeed)}
-                unit="KMPH"
-                labelOnTop={false}
-              />
+              <StatCell icon="flame-outline" label="Max Speed" value={formatSpeedKmph(maxSpeed)} unit="KMPH" labelOnTop={false} />
               <View style={styles.verticalDivider} />
-              <StatCell
-                icon="time-outline"
-                label="Start Time"
-                value={formatTime(trip?.start_time ?? 0)}
-                unit=""
-                labelOnTop={false}
-              />
+              <StatCell icon="time-outline" label="Start Time" value={formatTime12h(trip?.start_time ?? 0)} unit="" labelOnTop={false} />
               <View style={styles.verticalDivider} />
               <StatCell
                 icon="analytics-outline"
                 label="Top Altitude"
-                value={String(
-                  Math.round(
-                    points.reduce((max, p) => Math.max(max, p.alt ?? 0), 0),
-                  ),
-                )}
+                value={String(Math.round(points.reduce((max, p) => Math.max(max, p.alt ?? 0), 0)))}
                 unit="M"
                 labelOnTop={false}
               />
             </View>
           </View>
         </View>
-        {/* End shareable content */}
 
         <View style={{ height: 100 }} />
       </ScrollView>
 
-      {/* ── Bottom Action Bar ── */}
+      {/* Bottom bar */}
       <View style={styles.bottomBar}>
-        <Pressable
-          style={styles.bottomBtn}
-          onPress={() => setMapExpanded(true)}
-        >
+        <Pressable style={styles.bottomBtn} onPress={() => setMapExpanded(true)}>
           <Ionicons name="expand-outline" size={22} color={C.textDark} />
           <Text style={styles.bottomBtnText}>VIEW ROUTE</Text>
         </Pressable>
@@ -522,18 +312,11 @@ export default function CloudTripMapScreen() {
         </Pressable>
       </View>
 
-      {/* ── Photo Overlay ── */}
+      {/* Photo overlay */}
       {selectedPhoto && (
         <View style={styles.photoOverlay}>
-          <Image
-            source={{ uri: selectedPhoto }}
-            style={styles.fullPhoto}
-            resizeMode="contain"
-          />
-          <Pressable
-            style={styles.closeBtn}
-            onPress={() => setSelectedPhoto(null)}
-          >
+          <Image source={{ uri: selectedPhoto }} style={styles.fullPhoto} resizeMode="contain" />
+          <Pressable style={styles.closeBtn} onPress={() => setSelectedPhoto(null)}>
             <Ionicons name="close" size={24} color="#FF3B30" />
             <Text style={styles.closeBtnText}>Close</Text>
           </Pressable>
@@ -543,181 +326,12 @@ export default function CloudTripMapScreen() {
   );
 }
 
-// ── Styles ────────────────────────────────────────────────────────────────────
+// ── Screen-specific styles (community profile badge only) ─────────────────────
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: "#F5F5F5",
-  },
-  scrollView: {
-    flex: 1,
-  },
-
-  // Loading / Empty states
-  centred: {
-    flex: 1,
-    justifyContent: "center",
-    alignItems: "center",
-    backgroundColor: C.bg,
-    gap: 12,
-    padding: 32,
-  },
-  loadingText: {
-    color: C.textSecondary,
-    fontSize: 15,
-    marginTop: 8,
-  },
-  emptyIcon: {
-    fontSize: 48,
-  },
-  emptyTitle: {
-    color: "#FFF",
-    fontSize: 18,
-    fontWeight: "600",
-  },
-  emptyBody: {
-    color: C.textSecondary,
-    fontSize: 14,
-    textAlign: "center",
-  },
-
-  // Header
-  header: {
-    backgroundColor: C.headerBg,
-    paddingTop: 12,
-    paddingBottom: 10,
-    paddingHorizontal: 16,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 12,
-  },
-  headerIcon: {
-    alignItems: "center",
-    gap: 2,
-  },
-  headerIconLabel: {
-    color: "#FFF",
-    fontSize: 10,
-    fontWeight: "700",
-    letterSpacing: 1,
-  },
-  headerText: {
-    flex: 1,
-  },
-  headerTitle: {
-    color: "#FFF",
-    fontSize: 18,
-    fontWeight: "700",
-    letterSpacing: 0.5,
-  },
-  headerSubtitle: {
-    color: "rgba(255,255,255,0.7)",
-    fontSize: 13,
-    marginTop: 4,
-  },
-
-  // Map
-  mapContainer: {
-    height: SCREEN_HEIGHT * 0.35,
-    backgroundColor: "#E5E5E5",
-  },
-  mapExpanded: {
-    height: SCREEN_HEIGHT * 0.6,
-  },
-  mapOverlay: {
-    position: "absolute",
-    bottom: 12,
-    right: 12,
-    backgroundColor: "rgba(0,0,0,0.5)",
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 16,
-  },
-  mapOverlayText: {
-    color: "#FFF",
-    fontSize: 12,
-    fontWeight: "500",
-  },
-  collapseBtn: {
-    position: "absolute",
-    top: 12,
-    right: 12,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-    backgroundColor: "rgba(0,0,0,0.7)",
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: 20,
-  },
-  collapseBtnText: {
-    color: "#FFF",
-    fontSize: 13,
-    fontWeight: "600",
-  },
-
-  // Custom Markers
-  startMarker: {
-    width: 24,
-    height: 24,
-    borderRadius: 12,
-    backgroundColor: "#FFF",
-    borderWidth: 3,
-    borderColor: C.routeBlue,
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  startMarkerInner: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: C.routeBlue,
-  },
-  endMarker: {
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  waypointMarker: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    justifyContent: "center",
-    alignItems: "center",
-    borderWidth: 2,
-    borderColor: "#FFF",
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.3,
-    shadowRadius: 3,
-    elevation: 4,
-  },
-
-  // Profile Section
-  profileSection: {
-    backgroundColor: C.cardBg,
-    flexDirection: "row",
-    alignItems: "center",
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    gap: 12,
-  },
-  avatar: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    justifyContent: "center",
-    alignItems: "center",
-  },
+const localStyles = StyleSheet.create({
   profileInfo: {
     flex: 1,
     gap: 4,
-  },
-  profileName: {
-    fontSize: 16,
-    fontWeight: "700",
-    color: C.textDark,
-    letterSpacing: 0.5,
   },
   communityBadge: {
     flexDirection: "row",
@@ -728,122 +342,5 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: C.headerBg,
     fontWeight: "500",
-  },
-
-  // Stats Card
-  statsCard: {
-    backgroundColor: C.cardBg,
-    marginTop: 1,
-  },
-  statsRow: {
-    flexDirection: "row",
-    paddingVertical: 16,
-  },
-  statCell: {
-    flex: 1,
-    alignItems: "center",
-    justifyContent: "center",
-    paddingHorizontal: 8,
-  },
-  statLabelRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 4,
-  },
-  statIcon: {
-    marginRight: 2,
-  },
-  statLabel: {
-    fontSize: 11,
-    color: C.textMuted,
-    fontWeight: "500",
-  },
-  statValueRow: {
-    flexDirection: "row",
-    alignItems: "baseline",
-    gap: 3,
-    marginTop: 4,
-  },
-  statValueLarge: {
-    fontSize: 22,
-    fontWeight: "700",
-    color: C.textDark,
-  },
-  statUnit: {
-    fontSize: 12,
-    fontWeight: "600",
-    color: C.textDark,
-  },
-  verticalDivider: {
-    width: 1,
-    backgroundColor: C.divider,
-    marginVertical: 4,
-  },
-  divider: {
-    height: 1,
-    backgroundColor: C.divider,
-  },
-
-  // Bottom Bar
-  bottomBar: {
-    position: "absolute",
-    bottom: 0,
-    left: 0,
-    right: 0,
-    backgroundColor: C.cardBg,
-    flexDirection: "row",
-    borderTopWidth: 1,
-    borderTopColor: C.divider,
-    paddingBottom: 20,
-  },
-  bottomBtn: {
-    flex: 1,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    paddingVertical: 16,
-    gap: 8,
-  },
-  bottomBtnText: {
-    fontSize: 14,
-    fontWeight: "700",
-    color: C.textDark,
-    letterSpacing: 0.5,
-  },
-  bottomDivider: {
-    width: 1,
-    backgroundColor: C.divider,
-    marginVertical: 12,
-  },
-
-  // Photo Overlay
-  photoOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: "rgba(0,0,0,0.95)",
-    justifyContent: "center",
-    alignItems: "center",
-    zIndex: 999,
-  },
-  fullPhoto: {
-    width: "100%",
-    height: "80%",
-  },
-  closeBtn: {
-    position: "absolute",
-    bottom: 60,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-    backgroundColor: "rgba(255,59,48,0.15)",
-    paddingHorizontal: 24,
-    paddingVertical: 12,
-    borderRadius: 24,
-    borderWidth: 1,
-    borderColor: "#FF3B30",
-  },
-  closeBtnText: {
-    color: "#FF3B30",
-    fontSize: 16,
-    fontWeight: "600",
   },
 });
