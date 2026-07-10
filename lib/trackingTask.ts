@@ -12,11 +12,19 @@
  *  │    → accumulates distance (speed-gated Haversine)           │
  *  │    → pushes one PendingPoint into pendingPoints[]           │
  *  │    → updates liveState.speed for UI subscribers             │
+ *  │    → auto-pauses after AUTO_PAUSE_MS of no movement         │
+ *  │    → auto-resumes when movement is detected again           │
  *  │                                                             │
  *  │  setInterval flush (every 10 s)                             │
  *  │    → bulk-inserts pendingPoints[] in a single transaction   │
  *  │    → updates trips.total_dist                               │
  *  └─────────────────────────────────────────────────────────────┘
+ *
+ * Pause types
+ * ───────────
+ *  Manual pause  – GPS stops entirely (battery saving). User must resume.
+ *  Auto-pause    – GPS keeps running (so movement can be detected).
+ *                  Points are silently dropped until movement resumes.
  *
  * IMPORTANT: TaskManager.defineTask() MUST be called at module top-level
  * (not inside a function or component) so Expo can find it during the
@@ -34,22 +42,18 @@ import { telemetryPoints, trips } from "../db/schema";
 
 export const TRACKING_TASK_NAME = "REGISTERED_TRACKING_TASK";
 
-/** How often the batch is flushed to SQLite (milliseconds). */
 const FLUSH_INTERVAL_MS = 10_000;
-
-/** Maximum pending points before an emergency flush is forced. */
 const EMERGENCY_FLUSH_THRESHOLD = 150;
-
-/** Minimum points before time-based flush triggers (avoid flushing single points). */
 const MIN_POINTS_FOR_TIME_FLUSH = 5;
 
 /**
  * Minimum GPS speed (m/s) required before a fix contributes to total distance.
- * GPS-reported speed is Doppler-based and accurate even when position is noisy.
- * 0.5 m/s ≈ 1.8 km/h — filters out GPS drift while stationary or walking,
- * while capturing all real riding including slow traffic.
+ * 0.5 m/s ≈ 1.8 km/h — filters GPS drift while stationary.
  */
 const MIN_MOVING_SPEED_MS = 0.5;
+
+/** Stationary time before auto-pause triggers. */
+const AUTO_PAUSE_MS = 15 * 60 * 1000;
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -59,18 +63,16 @@ interface PendingPoint {
   lon: number;
   alt: number | null;
   speed: number | null;
-  timestamp: number; // Unix ms
+  timestamp: number;
 }
 
 export interface LiveRideState {
-  /** Speed in m/s from GPS. */
   speed: number;
-  /** Accumulated trip distance in metres. */
   distance: number;
-  /** Whether a trip is actively being recorded. */
   isRecording: boolean;
-  /** Whether recording is temporarily paused. */
   isPaused: boolean;
+  /** True when the pause was triggered automatically (GPS still running). */
+  isAutoPaused: boolean;
   currentTripId: number | null;
 }
 
@@ -81,6 +83,10 @@ let currentTripId: number | null = null;
 let tripDistMetres = 0;
 let lastCoord: { lat: number; lon: number } | null = null;
 let lastFlushTime = 0;
+let lastMovementTime = 0;
+let isAutoPaused = false;
+/** True when GPS was stopped by a manual pauseTrip() call. */
+let gpsRunning = false;
 
 let batchFlushTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -89,10 +95,10 @@ let liveState: LiveRideState = {
   distance: 0,
   isRecording: false,
   isPaused: false,
+  isAutoPaused: false,
   currentTripId: null,
 };
 
-// Listeners registered by useCurrentRide hook(s).
 const stateListeners = new Set<(s: LiveRideState) => void>();
 
 function emit(patch: Partial<LiveRideState>): void {
@@ -100,15 +106,11 @@ function emit(patch: Partial<LiveRideState>): void {
   stateListeners.forEach((fn) => fn(liveState));
 }
 
-/**
- * Subscribe to live ride state changes.
- * Returns an unsubscribe function — call it in the hook's cleanup effect.
- */
 export function subscribeToLiveState(
   listener: (s: LiveRideState) => void,
 ): () => void {
   stateListeners.add(listener);
-  listener(liveState); // immediate emit of current state
+  listener(liveState);
   return () => stateListeners.delete(listener);
 }
 
@@ -159,7 +161,6 @@ async function flushBatch(): Promise<void> {
     }
   } catch (err) {
     console.error("[MotoTrack] flushBatch error:", err);
-    // Re-queue only if the buffer hasn't grown dangerously large.
     if (pendingPoints.length < EMERGENCY_FLUSH_THRESHOLD) {
       pendingPoints.unshift(...batch);
     }
@@ -182,7 +183,6 @@ TaskManager.defineTask(
     }
     if (!data?.locations?.length || currentTripId === null) return;
 
-    // Ensure DB is ready for background writes
     try {
       initDatabase();
     } catch (e) {
@@ -196,11 +196,40 @@ TaskManager.defineTask(
         altitude: alt,
         speed,
       } = loc.coords;
+      const isMoving = speed !== null && speed >= MIN_MOVING_SPEED_MS;
 
-      // Accumulate trip distance using Haversine, but only when the GPS
-      // reports actual movement. GPS position is noisy (~3-5 m per fix),
-      // so standing still or walking would otherwise inflate the total.
-      if (lastCoord && speed !== null && speed >= MIN_MOVING_SPEED_MS) {
+      // ── Auto-resume: movement detected while auto-paused ──────────────────
+      if (isAutoPaused) {
+        if (isMoving) {
+          isAutoPaused = false;
+          lastMovementTime = loc.timestamp;
+          lastCoord = null; // fresh start — no phantom segment
+          emit({ isPaused: false, isAutoPaused: false });
+          // fall through to record this point normally
+        } else {
+          continue; // still stationary, skip point
+        }
+      }
+
+      // ── Track last movement time ──────────────────────────────────────────
+      if (isMoving) {
+        lastMovementTime = loc.timestamp;
+      }
+
+      // ── Auto-pause: stationary for too long ───────────────────────────────
+      if (
+        lastMovementTime > 0 &&
+        loc.timestamp - lastMovementTime > AUTO_PAUSE_MS
+      ) {
+        isAutoPaused = true;
+        lastCoord = null; // clear so resume starts fresh
+        await flushBatch();
+        emit({ isPaused: true, isAutoPaused: true, speed: 0 });
+        continue;
+      }
+
+      // ── Normal point recording ────────────────────────────────────────────
+      if (lastCoord && isMoving) {
         tripDistMetres += haversineMetres(
           lastCoord.lat,
           lastCoord.lon,
@@ -222,7 +251,6 @@ TaskManager.defineTask(
       emit({ speed: speed ?? 0, distance: tripDistMetres });
     }
 
-    // Flush based on time elapsed OR buffer size (works in background unlike setInterval)
     const now = Date.now();
     const timeElapsed = now - lastFlushTime;
     const shouldFlush =
@@ -239,25 +267,15 @@ TaskManager.defineTask(
 
 // ── Trip lifecycle ────────────────────────────────────────────────────────────
 
-/**
- * Creates a new trip record, starts the periodic batch flush, and begins
- * background location updates.
- *
- * @throws If foreground location permission is not granted.
- * @returns The new trip's database ID.
- */
 export async function startTrip(): Promise<number> {
   initDatabase();
 
-  // Android requires foreground permission before background can even be asked.
   const { status: fgStatus } =
     await Location.requestForegroundPermissionsAsync();
   if (fgStatus !== "granted") {
     throw new Error("Location permission is required to record rides.");
   }
 
-  // Background permission is best-effort: grants location when screen is off.
-  // Falls back to foreground-service-only if denied (works in Expo Go).
   let backgroundGranted = false;
   try {
     const { status: bgStatus } =
@@ -281,7 +299,9 @@ export async function startTrip(): Promise<number> {
   tripDistMetres = 0;
   lastCoord = null;
   pendingPoints = [];
-  lastFlushTime = Date.now();
+  lastFlushTime = now;
+  lastMovementTime = now; // full window before first auto-pause check
+  isAutoPaused = false;
 
   batchFlushTimer = setInterval(flushBatch, FLUSH_INTERVAL_MS);
 
@@ -297,17 +317,23 @@ export async function startTrip(): Promise<number> {
     },
   });
 
-  emit({ isRecording: true, isPaused: false, currentTripId: newTripId });
+  gpsRunning = true;
+  emit({
+    isRecording: true,
+    isPaused: false,
+    isAutoPaused: false,
+    currentTripId: newTripId,
+  });
   return newTripId;
 }
 
-/**
- * Stops GPS updates, performs a final flush, and marks the trip as ended.
- */
 export async function stopTrip(): Promise<void> {
   if (currentTripId === null) return;
 
-  await Location.stopLocationUpdatesAsync(TRACKING_TASK_NAME);
+  if (gpsRunning) {
+    await Location.stopLocationUpdatesAsync(TRACKING_TASK_NAME);
+    gpsRunning = false;
+  }
 
   if (batchFlushTimer) {
     clearInterval(batchFlushTimer);
@@ -324,19 +350,30 @@ export async function stopTrip(): Promise<void> {
   currentTripId = null;
   tripDistMetres = 0;
   lastCoord = null;
+  lastMovementTime = 0;
+  isAutoPaused = false;
 
-  emit({ isRecording: false, isPaused: false, currentTripId: null, speed: 0, distance: 0 });
+  emit({
+    isRecording: false,
+    isPaused: false,
+    isAutoPaused: false,
+    currentTripId: null,
+    speed: 0,
+    distance: 0,
+  });
 }
 
 /**
- * Pauses GPS recording without ending the trip.
- * lastCoord is cleared so the next point after resume doesn't create a
- * phantom distance segment across the gap.
+ * Manual pause — stops GPS entirely (saves battery).
+ * User must explicitly resume; auto-resume does not apply.
  */
 export async function pauseTrip(): Promise<void> {
   if (currentTripId === null || liveState.isPaused) return;
 
-  await Location.stopLocationUpdatesAsync(TRACKING_TASK_NAME);
+  if (gpsRunning) {
+    await Location.stopLocationUpdatesAsync(TRACKING_TASK_NAME);
+    gpsRunning = false;
+  }
 
   if (batchFlushTimer) {
     clearInterval(batchFlushTimer);
@@ -345,33 +382,42 @@ export async function pauseTrip(): Promise<void> {
 
   await flushBatch();
 
-  // Clear lastCoord so resumed tracking starts fresh from the next fix.
   lastCoord = null;
+  isAutoPaused = false;
 
-  emit({ isPaused: true, speed: 0 });
+  emit({ isPaused: true, isAutoPaused: false, speed: 0 });
 }
 
 /**
- * Resumes a paused trip. GPS updates and the flush timer restart on the
- * same trip record — distance accumulates from the next fix onwards.
+ * Resumes a paused trip (manual or auto).
+ * GPS is only restarted if it was stopped (manual pause); after an
+ * auto-pause GPS is already running so no restart is needed.
  */
 export async function resumeTrip(): Promise<void> {
   if (currentTripId === null || !liveState.isPaused) return;
 
-  lastFlushTime = Date.now();
-  batchFlushTimer = setInterval(flushBatch, FLUSH_INTERVAL_MS);
+  lastCoord = null; // fresh start — no phantom segment
+  lastMovementTime = Date.now(); // reset window so auto-pause doesn't fire immediately
+  isAutoPaused = false;
 
-  await Location.startLocationUpdatesAsync(TRACKING_TASK_NAME, {
-    accuracy: Location.Accuracy.BestForNavigation,
-    timeInterval: 1000,
-    distanceInterval: 0,
-    showsBackgroundLocationIndicator: true,
-    foregroundService: {
-      notificationTitle: "MotoTrack – Recording",
-      notificationBody: "Tap to return to the app.",
-      notificationColor: "#FF6B00",
-    },
-  });
+  if (!gpsRunning) {
+    lastFlushTime = Date.now();
+    batchFlushTimer = setInterval(flushBatch, FLUSH_INTERVAL_MS);
 
-  emit({ isPaused: false });
+    await Location.startLocationUpdatesAsync(TRACKING_TASK_NAME, {
+      accuracy: Location.Accuracy.BestForNavigation,
+      timeInterval: 1000,
+      distanceInterval: 0,
+      showsBackgroundLocationIndicator: true,
+      foregroundService: {
+        notificationTitle: "MotoTrack – Recording",
+        notificationBody: "Tap to return to the app.",
+        notificationColor: "#FF6B00",
+      },
+    });
+
+    gpsRunning = true;
+  }
+
+  emit({ isPaused: false, isAutoPaused: false });
 }

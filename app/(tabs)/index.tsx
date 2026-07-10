@@ -4,12 +4,12 @@ import { activateKeepAwakeAsync, deactivateKeepAwake } from "expo-keep-awake";
 import { useFocusEffect } from "expo-router";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  ActivityIndicator,
-  Animated,
-  Pressable,
-  StyleSheet,
-  Text,
-  View,
+    ActivityIndicator,
+    Animated,
+    Pressable,
+    StyleSheet,
+    Text,
+    View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import Svg, { Circle } from "react-native-svg";
@@ -100,8 +100,17 @@ function SpeedGauge({
 // ── Main Screen ───────────────────────────────────────────────────────────────
 
 export default function RideScreen() {
-  const { speedKmh, distance, isRecording, isPaused, startRide, stopRide, pauseRide, resumeRide } =
-    useCurrentRide();
+  const {
+    speedKmh,
+    distance,
+    isRecording,
+    isPaused,
+    isAutoPaused,
+    startRide,
+    stopRide,
+    pauseRide,
+    resumeRide,
+  } = useCurrentRide();
 
   const [loading, setLoading] = useState(false);
   const [rideError, setRideError] = useState<string | null>(null);
@@ -230,9 +239,15 @@ export default function RideScreen() {
 
         {isRecording && (
           <View style={[styles.recBadge, isPaused && styles.recBadgePaused]}>
-            <Animated.View style={[styles.recDot, isPaused && styles.recDotPaused, !isPaused && { opacity: pulse }]} />
+            <Animated.View
+              style={[
+                styles.recDot,
+                isPaused && styles.recDotPaused,
+                !isPaused && { opacity: pulse },
+              ]}
+            />
             <Text style={[styles.recText, isPaused && styles.recTextPaused]}>
-              {isPaused ? "PAUSED" : "REC"}
+              {isAutoPaused ? "AUTO-PAUSED" : isPaused ? "PAUSED" : "REC"}
             </Text>
           </View>
         )}
@@ -280,9 +295,17 @@ export default function RideScreen() {
               </Text>
             </View>
             <View style={styles.currentRideLive}>
-              <Animated.View style={[styles.liveDot, isPaused && styles.liveDotPaused, !isPaused && { opacity: pulse }]} />
-              <Text style={[styles.liveText, isPaused && styles.liveTextPaused]}>
-                {isPaused ? "PAUSED" : "LIVE"}
+              <Animated.View
+                style={[
+                  styles.liveDot,
+                  isPaused && styles.liveDotPaused,
+                  !isPaused && { opacity: pulse },
+                ]}
+              />
+              <Text
+                style={[styles.liveText, isPaused && styles.liveTextPaused]}
+              >
+                {isAutoPaused ? "AUTO-PAUSED" : isPaused ? "PAUSED" : "LIVE"}
               </Text>
             </View>
           </View>
@@ -324,8 +347,14 @@ export default function RideScreen() {
                 <ActivityIndicator color="#FFF" size="small" />
               ) : (
                 <>
-                  <Text style={styles.mainBtnText}>{isPaused ? "Resume" : "Pause"}</Text>
-                  <Ionicons name={isPaused ? "play-circle" : "pause-circle"} size={24} color="#FFF" />
+                  <Text style={styles.mainBtnText}>
+                    {isPaused ? "Resume" : "Pause"}
+                  </Text>
+                  <Ionicons
+                    name={isPaused ? "play-circle" : "pause-circle"}
+                    size={24}
+                    color="#FFF"
+                  />
                 </>
               )}
             </Pressable>
