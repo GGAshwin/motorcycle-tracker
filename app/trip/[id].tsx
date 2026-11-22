@@ -4,44 +4,51 @@ import * as FileSystem from "expo-file-system/legacy";
 import * as ImageManipulator from "expo-image-manipulator";
 import * as ImagePicker from "expo-image-picker";
 import { useLocalSearchParams, useNavigation } from "expo-router";
+import * as SecureStore from "expo-secure-store";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  ActivityIndicator,
-  Image,
-  Pressable,
-  ScrollView,
-  Share,
-  StyleSheet,
-  Text,
-  View,
+    ActivityIndicator,
+    Image,
+    Pressable,
+    ScrollView,
+    Share,
+    StyleSheet,
+    Text,
+    View,
 } from "react-native";
-import {
-  Camera,
-  GeoJSONSource,
-  Layer,
-  Map,
-  Marker,
-  type CameraRef,
-} from "@maplibre/maplibre-react-native";
 import { captureRef } from "react-native-view-shot";
-import * as SecureStore from "expo-secure-store";
 
+import { StatCell } from "@/components/stat-cell";
+import { TRIP_COLORS as C, OSM_STYLE } from "@/constants/trip";
 import { getDb } from "@/db/client";
 import type { TelemetryPoint, Trip, Waypoint } from "@/db/schema";
 import { telemetryPoints, trips, waypoints } from "@/db/schema";
+import {
+    formatDateFull,
+    formatDateShort,
+    formatDistKm,
+    formatDurationMins,
+    formatSpeedKmph,
+    formatTime12h,
+} from "@/lib/formatters";
 import { supabase } from "@/lib/supabase";
 import { pushLocalDataToCloud } from "@/lib/syncService";
-import {
-  formatDateFull,
-  formatDateShort,
-  formatDistKm,
-  formatDurationMins,
-  formatSpeedKmph,
-  formatTime12h,
-} from "@/lib/formatters";
-import { StatCell } from "@/components/stat-cell";
-import { TRIP_COLORS as C, OSM_STYLE } from "@/constants/trip";
 import { tripScreenStyles as styles } from "@/styles/tripScreen";
+
+const maplibre = (() => {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    return require("@maplibre/maplibre-react-native");
+  } catch {
+    return null;
+  }
+})();
+
+const Camera = maplibre?.Camera;
+const GeoJSONSource = maplibre?.GeoJSONSource;
+const Layer = maplibre?.Layer;
+const Map = maplibre?.Map;
+const Marker = maplibre?.Marker;
 
 // ── Screen ────────────────────────────────────────────────────────────────────
 
@@ -49,7 +56,7 @@ export default function TripMapScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const numericId = parseInt(id, 10);
   const navigation = useNavigation();
-  const cameraRef = useRef<CameraRef>(null);
+  const cameraRef = useRef<any>(null);
 
   const [trip, setTrip] = useState<Trip | null>(null);
   const [points, setPoints] = useState<TelemetryPoint[]>([]);
@@ -135,14 +142,20 @@ export default function TripMapScreen() {
       const manipResult = await ImageManipulator.manipulateAsync(
         result.assets[0].uri,
         [{ resize: { width: 800 } }],
-        { compress: 0.7, format: ImageManipulator.SaveFormat.JPEG, base64: true },
+        {
+          compress: 0.7,
+          format: ImageManipulator.SaveFormat.JPEG,
+          base64: true,
+        },
       );
 
       if (!manipResult.base64) return;
 
       const sizeKb = (manipResult.base64.length * 3) / 4 / 1024;
       if (sizeKb > 500) {
-        alert(`This photo is ${Math.round(sizeKb)}KB. The community upload limit is 500KB. Please try crop it smaller next time!`);
+        alert(
+          `This photo is ${Math.round(sizeKb)}KB. The community upload limit is 500KB. Please try crop it smaller next time!`,
+        );
         return;
       }
 
@@ -221,7 +234,9 @@ export default function TripMapScreen() {
       }
     })();
 
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [numericId, navigation]);
 
   // ── Fit map to route ────────────────────────────────────────────────────────
@@ -232,8 +247,16 @@ export default function TripMapScreen() {
     const lats = points.map((p) => p.lat);
     setTimeout(() => {
       cameraRef.current?.fitBounds(
-        [Math.min(...lngs), Math.min(...lats), Math.max(...lngs), Math.max(...lats)],
-        { padding: { top: 40, right: 40, bottom: 40, left: 40 }, duration: 300 },
+        [
+          Math.min(...lngs),
+          Math.min(...lats),
+          Math.max(...lngs),
+          Math.max(...lats),
+        ],
+        {
+          padding: { top: 40, right: 40, bottom: 40, left: 40 },
+          duration: 300,
+        },
       );
     }, 100);
   }, [points, mapExpanded]);
@@ -241,7 +264,10 @@ export default function TripMapScreen() {
   const routeGeoJSON = useMemo<GeoJSON.Feature>(
     () => ({
       type: "Feature",
-      geometry: { type: "LineString", coordinates: points.map((p) => [p.lon, p.lat]) },
+      geometry: {
+        type: "LineString",
+        coordinates: points.map((p) => [p.lon, p.lat]),
+      },
       properties: {},
     }),
     [points],
@@ -262,6 +288,18 @@ export default function TripMapScreen() {
     () => (trip ? formatDurationMins(trip.startTime, trip.endTime ?? null) : 0),
     [trip],
   );
+
+  if (!maplibre || !Camera || !GeoJSONSource || !Layer || !Map || !Marker) {
+    return (
+      <View style={styles.centred}>
+        <Text style={styles.emptyTitle}>Map module unavailable</Text>
+        <Text style={styles.emptyBody}>
+          This build does not include MapLibre native modules yet. Rebuild the
+          app with npx expo run:android and reopen this screen.
+        </Text>
+      </View>
+    );
+  }
 
   // ── Loading / Empty states ──────────────────────────────────────────────────
 
@@ -305,7 +343,9 @@ export default function TripMapScreen() {
               <Text style={styles.headerIconLabel}>RIDE</Text>
             </View>
             <View style={styles.headerText}>
-              <Text style={styles.headerTitle}>{riderName}&apos;S EPIC RIDE</Text>
+              <Text style={styles.headerTitle}>
+                {riderName}&apos;S EPIC RIDE
+              </Text>
               <Text style={styles.headerSubtitle}>
                 EPIC RIDE - {formatDateFull(trip?.date ?? Date.now())}
               </Text>
@@ -325,12 +365,21 @@ export default function TripMapScreen() {
               touchZoom={mapExpanded}
               onLongPress={handleMapLongPress}
             >
-              <Camera ref={cameraRef} initialViewState={{ center: [first.lon, first.lat], zoom: 12 }} />
+              <Camera
+                ref={cameraRef}
+                initialViewState={{ center: [first.lon, first.lat], zoom: 12 }}
+              />
               <GeoJSONSource id="route" data={routeGeoJSON}>
-                <Layer id="route-line" type="line" paint={{ "line-color": C.routeBlue, "line-width": 4 }} />
+                <Layer
+                  id="route-line"
+                  type="line"
+                  paint={{ "line-color": C.routeBlue, "line-width": 4 }}
+                />
               </GeoJSONSource>
               <Marker lngLat={[first.lon, first.lat]}>
-                <View style={styles.startMarker}><View style={styles.startMarkerInner} /></View>
+                <View style={styles.startMarker}>
+                  <View style={styles.startMarkerInner} />
+                </View>
               </Marker>
               <Marker lngLat={[last.lon, last.lat]}>
                 <View style={styles.endMarker}>
@@ -338,14 +387,35 @@ export default function TripMapScreen() {
                 </View>
               </Marker>
               {wpList.map((wp) => (
-                <Marker key={wp.id} lngLat={[wp.lon, wp.lat]} onPress={() => {
-                  if (wp.type === 3 && wp.imageUrl) setSelectedPhoto(wp.imageUrl);
-                }}>
-                  <View style={[styles.waypointMarker, {
-                    backgroundColor: wp.type === 1 ? "#E53935" : wp.type === 2 ? "#1E88E5" : C.iconAccent,
-                  }]}>
+                <Marker
+                  key={wp.id}
+                  lngLat={[wp.lon, wp.lat]}
+                  onPress={() => {
+                    if (wp.type === 3 && wp.imageUrl)
+                      setSelectedPhoto(wp.imageUrl);
+                  }}
+                >
+                  <View
+                    style={[
+                      styles.waypointMarker,
+                      {
+                        backgroundColor:
+                          wp.type === 1
+                            ? "#E53935"
+                            : wp.type === 2
+                              ? "#1E88E5"
+                              : C.iconAccent,
+                      },
+                    ]}
+                  >
                     <Ionicons
-                      name={wp.type === 1 ? "warning" : wp.type === 2 ? "eye" : "camera"}
+                      name={
+                        wp.type === 1
+                          ? "warning"
+                          : wp.type === 2
+                            ? "eye"
+                            : "camera"
+                      }
                       size={16}
                       color="#FFF"
                     />
@@ -360,7 +430,10 @@ export default function TripMapScreen() {
               </View>
             )}
             {mapExpanded && (
-              <Pressable style={styles.collapseBtn} onPress={() => setMapExpanded(false)}>
+              <Pressable
+                style={styles.collapseBtn}
+                onPress={() => setMapExpanded(false)}
+              >
                 <Ionicons name="contract-outline" size={20} color="#FFF" />
                 <Text style={styles.collapseBtnText}>Collapse</Text>
               </Pressable>
@@ -380,22 +453,52 @@ export default function TripMapScreen() {
           {/* Stats */}
           <View style={styles.statsCard}>
             <View style={styles.statsRow}>
-              <StatCell label="Distance" value={formatDistKm(trip?.totalDist ?? 0)} unit="KM" />
+              <StatCell
+                label="Distance"
+                value={formatDistKm(trip?.totalDist ?? 0)}
+                unit="KM"
+              />
               <View style={styles.verticalDivider} />
-              <StatCell icon="stopwatch-outline" label="Moving Time" value={String(durationMins)} unit="MINS" />
+              <StatCell
+                icon="stopwatch-outline"
+                label="Moving Time"
+                value={String(durationMins)}
+                unit="MINS"
+              />
               <View style={styles.verticalDivider} />
-              <StatCell icon="speedometer-outline" label="Avg Speed" value={formatSpeedKmph(avgSpeed)} unit="KMPH" />
+              <StatCell
+                icon="speedometer-outline"
+                label="Avg Speed"
+                value={formatSpeedKmph(avgSpeed)}
+                unit="KMPH"
+              />
             </View>
             <View style={styles.divider} />
             <View style={styles.statsRow}>
-              <StatCell icon="flame-outline" label="Max Speed" value={formatSpeedKmph(maxSpeed)} unit="KMPH" labelOnTop={false} />
+              <StatCell
+                icon="flame-outline"
+                label="Max Speed"
+                value={formatSpeedKmph(maxSpeed)}
+                unit="KMPH"
+                labelOnTop={false}
+              />
               <View style={styles.verticalDivider} />
-              <StatCell icon="time-outline" label="Start Time" value={formatTime12h(trip?.startTime ?? 0)} unit="" labelOnTop={false} />
+              <StatCell
+                icon="time-outline"
+                label="Start Time"
+                value={formatTime12h(trip?.startTime ?? 0)}
+                unit=""
+                labelOnTop={false}
+              />
               <View style={styles.verticalDivider} />
               <StatCell
                 icon="analytics-outline"
                 label="Top Altitude"
-                value={String(Math.round(points.reduce((max, p) => Math.max(max, p.alt ?? 0), 0)))}
+                value={String(
+                  Math.round(
+                    points.reduce((max, p) => Math.max(max, p.alt ?? 0), 0),
+                  ),
+                )}
                 unit="M"
                 labelOnTop={false}
               />
@@ -406,17 +509,29 @@ export default function TripMapScreen() {
         {/* Publish section */}
         <View style={localStyles.publishSection}>
           {!trip?.isPublic ? (
-            <Pressable style={localStyles.publishBtn} onPress={handleShareRoute}>
+            <Pressable
+              style={localStyles.publishBtn}
+              onPress={handleShareRoute}
+            >
               <Ionicons name="cloud-upload-outline" size={20} color="#FFF" />
               <Text style={localStyles.publishBtnText}>Share to Community</Text>
             </Pressable>
           ) : (
             <View style={localStyles.publishedRow}>
               <View style={localStyles.publishedBadge}>
-                <Ionicons name="checkmark-circle" size={18} color={C.headerBg} />
-                <Text style={localStyles.publishedText}>Shared to Community</Text>
+                <Ionicons
+                  name="checkmark-circle"
+                  size={18}
+                  color={C.headerBg}
+                />
+                <Text style={localStyles.publishedText}>
+                  Shared to Community
+                </Text>
               </View>
-              <Pressable style={localStyles.unshareBtn} onPress={handleUnshareRoute}>
+              <Pressable
+                style={localStyles.unshareBtn}
+                onPress={handleUnshareRoute}
+              >
                 <Text style={localStyles.unshareBtnText}>Unshare</Text>
               </Pressable>
             </View>
@@ -428,7 +543,10 @@ export default function TripMapScreen() {
 
       {/* Bottom bar */}
       <View style={styles.bottomBar}>
-        <Pressable style={styles.bottomBtn} onPress={() => setMapExpanded(true)}>
+        <Pressable
+          style={styles.bottomBtn}
+          onPress={() => setMapExpanded(true)}
+        >
           <Ionicons name="expand-outline" size={22} color={C.textDark} />
           <Text style={styles.bottomBtnText}>VIEW ROUTE</Text>
         </Pressable>
@@ -442,8 +560,15 @@ export default function TripMapScreen() {
       {/* Photo overlay */}
       {selectedPhoto && (
         <View style={styles.photoOverlay}>
-          <Image source={{ uri: selectedPhoto }} style={styles.fullPhoto} resizeMode="contain" />
-          <Pressable style={styles.closeBtn} onPress={() => setSelectedPhoto(null)}>
+          <Image
+            source={{ uri: selectedPhoto }}
+            style={styles.fullPhoto}
+            resizeMode="contain"
+          />
+          <Pressable
+            style={styles.closeBtn}
+            onPress={() => setSelectedPhoto(null)}
+          >
             <Ionicons name="close" size={24} color="#FF3B30" />
             <Text style={styles.closeBtnText}>Close</Text>
           </Pressable>

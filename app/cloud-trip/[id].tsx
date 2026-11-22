@@ -4,42 +4,49 @@ import * as FileSystem from "expo-file-system/legacy";
 import { useLocalSearchParams, useNavigation } from "expo-router";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  ActivityIndicator,
-  Image,
-  Pressable,
-  ScrollView,
-  Share,
-  StyleSheet,
-  Text,
-  View,
+    ActivityIndicator,
+    Image,
+    Pressable,
+    ScrollView,
+    Share,
+    StyleSheet,
+    Text,
+    View,
 } from "react-native";
-import {
-  Camera,
-  GeoJSONSource,
-  Layer,
-  Map,
-  Marker,
-  type CameraRef,
-} from "@maplibre/maplibre-react-native";
 import { captureRef } from "react-native-view-shot";
 
-import {
-  formatDateFull,
-  formatDistKm,
-  formatDurationMins,
-  formatSpeedKmph,
-  formatTime12h,
-} from "@/lib/formatters";
 import { StatCell } from "@/components/stat-cell";
 import { TRIP_COLORS as C, OSM_STYLE } from "@/constants/trip";
+import {
+    formatDateFull,
+    formatDistKm,
+    formatDurationMins,
+    formatSpeedKmph,
+    formatTime12h,
+} from "@/lib/formatters";
 import { tripScreenStyles as styles } from "@/styles/tripScreen";
+
+const maplibre = (() => {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    return require("@maplibre/maplibre-react-native");
+  } catch {
+    return null;
+  }
+})();
+
+const Camera = maplibre?.Camera;
+const GeoJSONSource = maplibre?.GeoJSONSource;
+const Layer = maplibre?.Layer;
+const Map = maplibre?.Map;
+const Marker = maplibre?.Marker;
 
 // ── Screen ────────────────────────────────────────────────────────────────────
 
 export default function CloudTripMapScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const navigation = useNavigation();
-  const cameraRef = useRef<CameraRef>(null);
+  const cameraRef = useRef<any>(null);
 
   const [trip, setTrip] = useState<any>(null);
   const [points, setPoints] = useState<any[]>([]);
@@ -117,7 +124,9 @@ export default function CloudTripMapScreen() {
       }
     })();
 
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [id, navigation]);
 
   // ── Fit map to route ────────────────────────────────────────────────────────
@@ -128,8 +137,16 @@ export default function CloudTripMapScreen() {
     const lats = points.map((p) => p.lat);
     setTimeout(() => {
       cameraRef.current?.fitBounds(
-        [Math.min(...lngs), Math.min(...lats), Math.max(...lngs), Math.max(...lats)],
-        { padding: { top: 40, right: 40, bottom: 40, left: 40 }, duration: 300 },
+        [
+          Math.min(...lngs),
+          Math.min(...lats),
+          Math.max(...lngs),
+          Math.max(...lats),
+        ],
+        {
+          padding: { top: 40, right: 40, bottom: 40, left: 40 },
+          duration: 300,
+        },
       );
     }, 100);
   }, [points, mapExpanded]);
@@ -137,7 +154,10 @@ export default function CloudTripMapScreen() {
   const routeGeoJSON = useMemo<GeoJSON.Feature>(
     () => ({
       type: "Feature",
-      geometry: { type: "LineString", coordinates: points.map((p) => [p.lon, p.lat]) },
+      geometry: {
+        type: "LineString",
+        coordinates: points.map((p) => [p.lon, p.lat]),
+      },
       properties: {},
     }),
     [points],
@@ -155,9 +175,22 @@ export default function CloudTripMapScreen() {
   }, [points]);
 
   const durationMins = useMemo(
-    () => (trip ? formatDurationMins(trip.start_time, trip.end_time ?? null) : 0),
+    () =>
+      trip ? formatDurationMins(trip.start_time, trip.end_time ?? null) : 0,
     [trip],
   );
+
+  if (!maplibre || !Camera || !GeoJSONSource || !Layer || !Map || !Marker) {
+    return (
+      <View style={styles.centred}>
+        <Text style={styles.emptyTitle}>Map module unavailable</Text>
+        <Text style={styles.emptyBody}>
+          This build does not include MapLibre native modules yet. Rebuild the
+          app with npx expo run:android and reopen this screen.
+        </Text>
+      </View>
+    );
+  }
 
   // ── Loading / Empty states ──────────────────────────────────────────────────
 
@@ -201,11 +234,15 @@ export default function CloudTripMapScreen() {
               <Text style={styles.headerIconLabel}>RIDE</Text>
             </View>
             <View style={styles.headerText}>
-              <Text style={styles.headerTitle}>{riderName}&apos;S EPIC RIDE</Text>
+              <Text style={styles.headerTitle}>
+                {riderName}&apos;S EPIC RIDE
+              </Text>
               <Text style={styles.headerSubtitle}>
                 COMMUNITY RIDE -{" "}
                 {formatDateFull(
-                  trip?.created_at ? new Date(trip.created_at).getTime() : Date.now(),
+                  trip?.created_at
+                    ? new Date(trip.created_at).getTime()
+                    : Date.now(),
                 )}
               </Text>
             </View>
@@ -223,12 +260,21 @@ export default function CloudTripMapScreen() {
               dragPan={mapExpanded}
               touchZoom={mapExpanded}
             >
-              <Camera ref={cameraRef} initialViewState={{ center: [first.lon, first.lat], zoom: 12 }} />
+              <Camera
+                ref={cameraRef}
+                initialViewState={{ center: [first.lon, first.lat], zoom: 12 }}
+              />
               <GeoJSONSource id="route" data={routeGeoJSON}>
-                <Layer id="route-line" type="line" paint={{ "line-color": C.routeBlue, "line-width": 4 }} />
+                <Layer
+                  id="route-line"
+                  type="line"
+                  paint={{ "line-color": C.routeBlue, "line-width": 4 }}
+                />
               </GeoJSONSource>
               <Marker lngLat={[first.lon, first.lat]}>
-                <View style={styles.startMarker}><View style={styles.startMarkerInner} /></View>
+                <View style={styles.startMarker}>
+                  <View style={styles.startMarkerInner} />
+                </View>
               </Marker>
               <Marker lngLat={[last.lon, last.lat]}>
                 <View style={styles.endMarker}>
@@ -236,14 +282,35 @@ export default function CloudTripMapScreen() {
                 </View>
               </Marker>
               {wpList.map((wp) => (
-                <Marker key={wp.id} lngLat={[wp.lon, wp.lat]} onPress={() => {
-                  if (wp.type === 3 && wp.image_url) setSelectedPhoto(wp.image_url);
-                }}>
-                  <View style={[styles.waypointMarker, {
-                    backgroundColor: wp.type === 1 ? "#E53935" : wp.type === 2 ? "#1E88E5" : C.iconAccent,
-                  }]}>
+                <Marker
+                  key={wp.id}
+                  lngLat={[wp.lon, wp.lat]}
+                  onPress={() => {
+                    if (wp.type === 3 && wp.image_url)
+                      setSelectedPhoto(wp.image_url);
+                  }}
+                >
+                  <View
+                    style={[
+                      styles.waypointMarker,
+                      {
+                        backgroundColor:
+                          wp.type === 1
+                            ? "#E53935"
+                            : wp.type === 2
+                              ? "#1E88E5"
+                              : C.iconAccent,
+                      },
+                    ]}
+                  >
                     <Ionicons
-                      name={wp.type === 1 ? "warning" : wp.type === 2 ? "eye" : "camera"}
+                      name={
+                        wp.type === 1
+                          ? "warning"
+                          : wp.type === 2
+                            ? "eye"
+                            : "camera"
+                      }
                       size={16}
                       color="#FFF"
                     />
@@ -258,7 +325,10 @@ export default function CloudTripMapScreen() {
               </View>
             )}
             {mapExpanded && (
-              <Pressable style={styles.collapseBtn} onPress={() => setMapExpanded(false)}>
+              <Pressable
+                style={styles.collapseBtn}
+                onPress={() => setMapExpanded(false)}
+              >
                 <Ionicons name="contract-outline" size={20} color="#FFF" />
                 <Text style={styles.collapseBtnText}>Collapse</Text>
               </Pressable>
@@ -271,10 +341,14 @@ export default function CloudTripMapScreen() {
               <Ionicons name="person-circle" size={48} color={C.headerBg} />
             </View>
             <View style={localStyles.profileInfo}>
-              <Text style={styles.profileName}>@{trip?.username || "rider"}</Text>
+              <Text style={styles.profileName}>
+                @{trip?.username || "rider"}
+              </Text>
               <View style={localStyles.communityBadge}>
                 <Ionicons name="globe-outline" size={14} color={C.headerBg} />
-                <Text style={localStyles.communityBadgeText}>Community Route</Text>
+                <Text style={localStyles.communityBadgeText}>
+                  Community Route
+                </Text>
               </View>
             </View>
           </View>
@@ -284,22 +358,52 @@ export default function CloudTripMapScreen() {
           {/* Stats */}
           <View style={styles.statsCard}>
             <View style={styles.statsRow}>
-              <StatCell label="Distance" value={formatDistKm(trip?.total_dist ?? 0)} unit="KM" />
+              <StatCell
+                label="Distance"
+                value={formatDistKm(trip?.total_dist ?? 0)}
+                unit="KM"
+              />
               <View style={styles.verticalDivider} />
-              <StatCell icon="stopwatch-outline" label="Moving Time" value={String(durationMins)} unit="MINS" />
+              <StatCell
+                icon="stopwatch-outline"
+                label="Moving Time"
+                value={String(durationMins)}
+                unit="MINS"
+              />
               <View style={styles.verticalDivider} />
-              <StatCell icon="speedometer-outline" label="Avg Speed" value={formatSpeedKmph(avgSpeed)} unit="KMPH" />
+              <StatCell
+                icon="speedometer-outline"
+                label="Avg Speed"
+                value={formatSpeedKmph(avgSpeed)}
+                unit="KMPH"
+              />
             </View>
             <View style={styles.divider} />
             <View style={styles.statsRow}>
-              <StatCell icon="flame-outline" label="Max Speed" value={formatSpeedKmph(maxSpeed)} unit="KMPH" labelOnTop={false} />
+              <StatCell
+                icon="flame-outline"
+                label="Max Speed"
+                value={formatSpeedKmph(maxSpeed)}
+                unit="KMPH"
+                labelOnTop={false}
+              />
               <View style={styles.verticalDivider} />
-              <StatCell icon="time-outline" label="Start Time" value={formatTime12h(trip?.start_time ?? 0)} unit="" labelOnTop={false} />
+              <StatCell
+                icon="time-outline"
+                label="Start Time"
+                value={formatTime12h(trip?.start_time ?? 0)}
+                unit=""
+                labelOnTop={false}
+              />
               <View style={styles.verticalDivider} />
               <StatCell
                 icon="analytics-outline"
                 label="Top Altitude"
-                value={String(Math.round(points.reduce((max, p) => Math.max(max, p.alt ?? 0), 0)))}
+                value={String(
+                  Math.round(
+                    points.reduce((max, p) => Math.max(max, p.alt ?? 0), 0),
+                  ),
+                )}
                 unit="M"
                 labelOnTop={false}
               />
@@ -312,7 +416,10 @@ export default function CloudTripMapScreen() {
 
       {/* Bottom bar */}
       <View style={styles.bottomBar}>
-        <Pressable style={styles.bottomBtn} onPress={() => setMapExpanded(true)}>
+        <Pressable
+          style={styles.bottomBtn}
+          onPress={() => setMapExpanded(true)}
+        >
           <Ionicons name="expand-outline" size={22} color={C.textDark} />
           <Text style={styles.bottomBtnText}>VIEW ROUTE</Text>
         </Pressable>
@@ -326,8 +433,15 @@ export default function CloudTripMapScreen() {
       {/* Photo overlay */}
       {selectedPhoto && (
         <View style={styles.photoOverlay}>
-          <Image source={{ uri: selectedPhoto }} style={styles.fullPhoto} resizeMode="contain" />
-          <Pressable style={styles.closeBtn} onPress={() => setSelectedPhoto(null)}>
+          <Image
+            source={{ uri: selectedPhoto }}
+            style={styles.fullPhoto}
+            resizeMode="contain"
+          />
+          <Pressable
+            style={styles.closeBtn}
+            onPress={() => setSelectedPhoto(null)}
+          >
             <Ionicons name="close" size={24} color="#FF3B30" />
             <Text style={styles.closeBtnText}>Close</Text>
           </Pressable>

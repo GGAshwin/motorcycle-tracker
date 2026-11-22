@@ -1,17 +1,23 @@
-import { useState } from 'react';
-import { View, Text, StyleSheet, FlatList, ActivityIndicator, Pressable } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import { supabase } from '@/lib/supabase';
-import { useFocusEffect, router } from 'expo-router';
-import { useCallback } from 'react';
+import { supabase } from "@/lib/supabase";
+import { router, useFocusEffect } from "expo-router";
+import { useCallback, useState } from "react";
+import {
+    ActivityIndicator,
+    FlatList,
+    Pressable,
+    StyleSheet,
+    Text,
+    View,
+} from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 
 const C = {
-  bg:         '#0D0D0F',
-  surface:    '#1C1C1E',
-  border:     '#2C2C2E',
-  orange:     '#FF6B00',
-  textPrimary:   '#FFFFFF',
-  textSecondary: '#8E8E93',
+  bg: "#0D0D0F",
+  surface: "#1C1C1E",
+  border: "#2C2C2E",
+  orange: "#FF6B00",
+  textPrimary: "#FFFFFF",
+  textSecondary: "#8E8E93",
 } as const;
 
 export default function CommunityScreen() {
@@ -22,16 +28,16 @@ export default function CommunityScreen() {
     setLoading(true);
     try {
       const { data, error } = await supabase
-        .from('trips')
-        .select('*')
-        .eq('is_public', true)
-        .order('created_at', { ascending: false })
+        .from("trips")
+        .select("*")
+        .eq("is_public", true)
+        .order("created_at", { ascending: false })
         .limit(20);
 
       if (error) throw error;
       setRoutes(data || []);
     } catch (err) {
-      console.error('Error fetching public routes:', err);
+      console.error("Error fetching public routes:", err);
     } finally {
       setLoading(false);
     }
@@ -40,16 +46,18 @@ export default function CommunityScreen() {
   useFocusEffect(
     useCallback(() => {
       fetchPublicRoutes();
-    }, [])
+    }, []),
   );
 
   const renderItem = ({ item }: { item: any }) => (
-    <Pressable 
+    <Pressable
       style={({ pressed }) => [styles.card, pressed && { opacity: 0.7 }]}
       onPress={() => router.push(`/cloud-trip/${item.id}`)}
     >
       <Text style={styles.title}>@{item.username}</Text>
-      <Text style={styles.subtitle}>Distance {(item.total_dist / 1000).toFixed(2)} km</Text>
+      <Text style={styles.subtitle}>
+        Distance {(item.total_dist / 1000).toFixed(2)} km
+      </Text>
     </Pressable>
   );
 
@@ -84,8 +92,8 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: C.border,
   },
-  headerTitle: { color: C.textPrimary, fontSize: 24, fontWeight: '700' },
-  center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  headerTitle: { color: C.textPrimary, fontSize: 24, fontWeight: "700" },
+  center: { flex: 1, justifyContent: "center", alignItems: "center" },
   list: { padding: 16, gap: 12 },
   card: {
     backgroundColor: C.surface,
@@ -94,7 +102,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: C.border,
   },
-  title: { color: C.orange, fontSize: 16, fontWeight: '700' },
+  title: { color: C.orange, fontSize: 16, fontWeight: "700" },
   subtitle: { color: C.textSecondary, fontSize: 14, marginTop: 4 },
-  emptyText: { color: C.textSecondary, textAlign: 'center', marginTop: 40 },
+  emptyText: { color: C.textSecondary, textAlign: "center", marginTop: 40 },
 });
