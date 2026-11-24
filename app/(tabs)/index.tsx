@@ -14,8 +14,12 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import Svg, { Circle } from "react-native-svg";
 
+import { AppCard } from "@/components/ui/app-card";
+import { StatusChip } from "@/components/ui/status-chip";
+import { paletteForScheme } from "@/constants/design-system";
 import { getDb } from "@/db/client";
 import { trips } from "@/db/schema";
+import { useColorScheme } from "@/hooks/use-color-scheme";
 import { useCurrentRide } from "@/hooks/useCurrentRide";
 
 // ── Colors ────────────────────────────────────────────────────────────────────
@@ -100,6 +104,7 @@ function SpeedGauge({
 // ── Main Screen ───────────────────────────────────────────────────────────────
 
 export default function RideScreen() {
+  const palette = paletteForScheme(useColorScheme());
   const {
     speedKmh,
     distance,
@@ -225,9 +230,20 @@ export default function RideScreen() {
   }, [isPaused, pauseRide, resumeRide, pulse, startPulse]);
 
   const totalDist = odometer.totalDist + (isRecording ? distance : 0);
+  const statusLabel = isAutoPaused
+    ? "AUTO PAUSED"
+    : isPaused
+      ? "PAUSED"
+      : isRecording
+        ? "RECORDING"
+        : "READY";
+  const statusTone =
+    isAutoPaused || isPaused ? "warning" : isRecording ? "error" : "brand";
 
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView
+      style={[styles.container, { backgroundColor: palette.background }]}
+    >
       {/* Header */}
       <View style={styles.header}>
         <View style={styles.brand}>
@@ -237,47 +253,43 @@ export default function RideScreen() {
           <Text style={styles.brandName}>MotoTrack</Text>
         </View>
 
-        {isRecording && (
-          <View style={[styles.recBadge, isPaused && styles.recBadgePaused]}>
-            <Animated.View
-              style={[
-                styles.recDot,
-                isPaused && styles.recDotPaused,
-                !isPaused && { opacity: pulse },
-              ]}
-            />
-            <Text style={[styles.recText, isPaused && styles.recTextPaused]}>
-              {isAutoPaused ? "AUTO-PAUSED" : isPaused ? "PAUSED" : "REC"}
-            </Text>
-          </View>
-        )}
+        <Animated.View style={isRecording ? { opacity: pulse } : undefined}>
+          <StatusChip label={statusLabel} tone={statusTone} />
+        </Animated.View>
       </View>
 
       {/* Speed Gauge */}
-      <View style={styles.gaugeWrapper}>
-        <SpeedGauge speed={speedKmh} />
-      </View>
+      <AppCard style={styles.heroCard}>
+        <Text style={[styles.heroLabel, { color: palette.textSecondary }]}>
+          Current Speed
+        </Text>
+        <View style={styles.gaugeWrapper}>
+          <SpeedGauge speed={speedKmh} />
+        </View>
+      </AppCard>
 
       {/* Stats Row */}
-      <View style={styles.statsRow}>
-        <View style={styles.statBox}>
-          <Ionicons name="flag-outline" size={18} color={C.orange} />
-          <Text style={styles.statValue}>{odometer.count}</Text>
-          <Text style={styles.statLabel}>Trips</Text>
-        </View>
+      <AppCard style={styles.statsCard}>
+        <View style={styles.statsRow}>
+          <View style={styles.statBox}>
+            <Ionicons name="flag-outline" size={18} color={C.orange} />
+            <Text style={styles.statValue}>{odometer.count}</Text>
+            <Text style={styles.statLabel}>Trips</Text>
+          </View>
 
-        <View style={styles.statDivider} />
+          <View style={styles.statDivider} />
 
-        <View style={styles.statBox}>
-          <Ionicons name="speedometer-outline" size={18} color={C.orange} />
-          <Text style={styles.statValue}>
-            {totalDist < 1000
-              ? `${Math.round(totalDist)}m`
-              : `${(totalDist / 1000).toFixed(1)}km`}
-          </Text>
-          <Text style={styles.statLabel}>Total Distance</Text>
+          <View style={styles.statBox}>
+            <Ionicons name="speedometer-outline" size={18} color={C.orange} />
+            <Text style={styles.statValue}>
+              {totalDist < 1000
+                ? `${Math.round(totalDist)}m`
+                : `${(totalDist / 1000).toFixed(1)}km`}
+            </Text>
+            <Text style={styles.statLabel}>Total Distance</Text>
+          </View>
         </View>
-      </View>
+      </AppCard>
 
       {/* Bottom Actions */}
       <View style={styles.bottomSection}>
@@ -285,30 +297,32 @@ export default function RideScreen() {
 
         {/* Current Ride Distance */}
         {isRecording && (
-          <View style={styles.currentRide}>
-            <View style={styles.currentRideLeft}>
-              <Text style={styles.currentRideTitle}>This Ride</Text>
-              <Text style={styles.currentRideMeta}>
-                {distance < 1000
-                  ? `${Math.round(distance)} m`
-                  : `${(distance / 1000).toFixed(2)} km`}
-              </Text>
+          <AppCard>
+            <View style={styles.currentRide}>
+              <View style={styles.currentRideLeft}>
+                <Text style={styles.currentRideTitle}>This Ride</Text>
+                <Text style={styles.currentRideMeta}>
+                  {distance < 1000
+                    ? `${Math.round(distance)} m`
+                    : `${(distance / 1000).toFixed(2)} km`}
+                </Text>
+              </View>
+              <View style={styles.currentRideLive}>
+                <Animated.View
+                  style={[
+                    styles.liveDot,
+                    isPaused && styles.liveDotPaused,
+                    !isPaused && { opacity: pulse },
+                  ]}
+                />
+                <Text
+                  style={[styles.liveText, isPaused && styles.liveTextPaused]}
+                >
+                  {isAutoPaused ? "AUTO-PAUSED" : isPaused ? "PAUSED" : "LIVE"}
+                </Text>
+              </View>
             </View>
-            <View style={styles.currentRideLive}>
-              <Animated.View
-                style={[
-                  styles.liveDot,
-                  isPaused && styles.liveDotPaused,
-                  !isPaused && { opacity: pulse },
-                ]}
-              />
-              <Text
-                style={[styles.liveText, isPaused && styles.liveTextPaused]}
-              >
-                {isAutoPaused ? "AUTO-PAUSED" : isPaused ? "PAUSED" : "LIVE"}
-              </Text>
-            </View>
-          </View>
+          </AppCard>
         )}
 
         {isRecording ? (
@@ -452,7 +466,19 @@ const styles = StyleSheet.create({
 
   gaugeWrapper: {
     alignItems: "center",
-    paddingVertical: 20,
+    paddingVertical: 10,
+  },
+  heroCard: {
+    marginHorizontal: 20,
+    marginBottom: 12,
+    marginTop: 6,
+  },
+  heroLabel: {
+    fontSize: 14,
+    fontWeight: "600",
+    textAlign: "center",
+    textTransform: "uppercase",
+    letterSpacing: 1,
   },
   gaugeContainer: {
     width: GAUGE_SIZE,
@@ -498,12 +524,11 @@ const styles = StyleSheet.create({
 
   statsRow: {
     flexDirection: "row",
+    paddingVertical: 4,
+  },
+  statsCard: {
     marginHorizontal: 20,
-    backgroundColor: C.card,
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: C.cardBorder,
-    paddingVertical: 20,
+    marginBottom: 12,
   },
   statBox: {
     flex: 1,
@@ -530,12 +555,8 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    backgroundColor: C.card,
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: C.cardBorder,
-    paddingHorizontal: 16,
-    paddingVertical: 14,
+    paddingHorizontal: 2,
+    paddingVertical: 2,
   },
   currentRideLeft: {
     gap: 4,
